@@ -3,7 +3,7 @@
 [![Rust](https://img.shields.io/badge/rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A decoupled, 4-phase modular Rust library for web browsing and AI Intermediate Representation (IR) generation. Built around an **Interleaved Queue-Based Streaming Architecture** (`Browser::builder()`) with support for static HTTP fetching, **Playwright-style dynamic rendering**, and **Anti-Bot Stealth Mode** via Headless Chrome.
+A high-performance Rust web browsing library and AI Intermediate Representation (IR) generator. Built around a streaming builder architecture (`Browser::builder()`) with support for static HTTP fetching, dynamic JavaScript rendering, and anti-bot stealth mode via Headless Chrome.
 
 ---
 
@@ -26,15 +26,15 @@ A decoupled, 4-phase modular Rust library for web browsing and AI Intermediate R
 │ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
 │                                            │                                             │
 │ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
-│ │ 4. Phase 2: Extract PageIR (Title, Noise Pruning, Markdown IR)                       │ │
+│ │ 4. Extract PageIR (Title, Noise Pruning, Markdown IR, Thumbnails, Links)               │ │
 │ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
 │                                            │                                             │
 │ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
-│ │ 5. Phase 3: Execute Content Analysis Callback (.on_page / LLM Prompting)              │ │
+│ │ 5. Execute Content Analysis Callback (.on_page / LLM Prompting)                        │ │
 │ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
 │                                            │                                             │
 │ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
-│ │ 6. Phase 4: Export Payload to Disk (./out / Vector DB)                                │ │
+│ │ 6. Export Payload to Disk (./out / Vector DB)                                          │ │
 │ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
 │                                            │                                             │
 │ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
@@ -54,12 +54,13 @@ A decoupled, 4-phase modular Rust library for web browsing and AI Intermediate R
 
 ## 🌟 Key Features
 
-- **Queue-Based Push/Pop Navigation**: Discovered links are pushed onto a navigation queue during page scanning, and popped one by one for real-time processing and instant disk export.
+- **Streaming Queue Navigation**: Discovered links are pushed onto a navigation queue during page scanning, and popped one by one for real-time processing and instant disk export.
 - **Fluent Builder Pattern (`Browser::builder()`)**: Configure start URL, crawling depth, custom User-Agent, output directories, rendering modes, stealth flags, and callback hooks.
 - **Anti-Bot Stealth Mode (`.stealth(true)`)**: Bypasses bot detection by stripping `--disable-blink-features=AutomationControlled`, masking `navigator.webdriver`, spoofing `window.chrome`, `navigator.plugins`, and WebGL vendor flags.
-- **Playwright-Style Dynamic Rendering**: Executes client-side JavaScript, CSS layout evaluations, and SPA hydration (React, Vue, Angular) via Headless Chrome.
-- **Playwright-Grade Wait Lifecycles (`WaitUntil`)**: Wait for `NetworkIdle` (0 active requests for 500ms), `DomContentLoaded`, or custom CSS selectors (`WaitUntil::Selector("main")`).
-- **Token-Optimized AI IR**: Strips HTML scripts, styles, and wrapper noise into clean, compact Markdown suitable for LLMs.
+- **Dynamic Headless Rendering**: Executes client-side JavaScript, CSS layout evaluations, and SPA hydration (React, Vue, Angular) via Headless Chrome.
+- **Advanced Wait Lifecycles (`WaitUntil`)**: Wait for `NetworkIdle` (0 active requests for 500ms), `DomContentLoaded`, or custom CSS selectors (`WaitUntil::Selector("main")`).
+- **Debug Inspector Mode (`.debug(true)` / `--debug`)**: Logs Chrome CDP rendering steps, network responses, and DOM settlement events, dumping raw HTML to `./out/debug_dump.html`.
+- **Token-Optimized AI IR**: Strips HTML scripts, styles, and wrapper noise into clean, compact Markdown (including article cards, links, and image thumbnails) suitable for LLMs.
 - **Pluggable Storage Exporters**: Built-in file exporter (defaulting to `./out`) and extensible `StorageExporter` trait.
 
 ---
@@ -77,9 +78,15 @@ async-trait = "0.1"
 
 ---
 
-## 🚀 Quick Start (Queue Streaming Crawl)
+## 🚀 Quick Start
 
-Execute a full 4-phase crawl using the Builder API:
+Execute a web crawl using the example binary:
+
+```bash
+cargo run --example example
+```
+
+### Code Overview (`examples/example.rs`)
 
 ```rust
 use std::time::Duration;
@@ -88,27 +95,41 @@ use browser_crawler::{Browser, RenderMode, TimeoutStrategy, WaitUntil};
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let browser = Browser::builder()
-        .start_url("https://example.com")
-        .max_depth(2)
+        .start_url("https://0xbuffer.com/")
+        .max_depth(1)
         .render_mode(RenderMode::Dynamic)
         .stealth(true)
-        .wait_until(WaitUntil::NetworkIdle)
-        .render_timeout(Duration::from_secs(10))
+        .wait_until(WaitUntil::Delay(Duration::from_secs(3)))
+        .render_timeout(Duration::from_secs(12))
         .timeout_strategy(TimeoutStrategy::ExtractPartial)
         .on_page(|page_ir| async move {
-            println!("[Phase 3] Processed URL: {}", page_ir.url);
+            println!("[Process] Processed URL: {}", page_ir.url);
             println!("Title: {}", page_ir.title);
             Ok(())
         })
         .build()?;
 
-    // Execute the queue-based pipeline
+    // Execute the streaming browser pipeline
     let summary = browser.run().await?;
     println!("Pages Processed: {}", summary.pages_processed);
     println!("Total IR Bytes: {}", summary.total_ir_bytes);
     println!("Visited URLs: {:?}", summary.visited_urls);
     Ok(())
 }
+```
+
+---
+
+## 🔍 How to Use Debug Mode
+
+Debug Mode logs Headless Chrome execution steps, CDP network status responses, and DOM settlement events. It also writes a raw DOM snapshot to `./out/debug_dump.html` for offline DOM inspection.
+
+### Method 1: Via Terminal CLI Flag (`--debug`)
+
+Pass `--debug` when running the example:
+
+```bash
+cargo run --example example -- --debug
 ```
 
 ---
@@ -127,21 +148,26 @@ pub struct CrawlSummary {
 
 ---
 
-## 🧪 Running Examples & Tests
+## 🧪 Running Example Commands
 
-### Basic Interleaved Crawl (Outputs to `./out`)
+### Default Dynamic Render Run (`https://0xbuffer.com/`)
 ```bash
-cargo run --example basic_crawl
+cargo run --example example
 ```
 
-### Dynamic Crawl Example (Headless Chrome)
+### Debug Inspection Mode
 ```bash
-cargo run --example dynamic_crawl
+cargo run --example example -- --debug
 ```
 
-### Stealth Crawl Example
+### Fast Static HTTP Fetch Mode
 ```bash
-cargo run --example stealth_crawl
+cargo run --example example -- --static
+```
+
+### Target Custom URL
+```bash
+cargo run --example example -- https://example.com --debug
 ```
 
 ### Run Unit & Doc Tests

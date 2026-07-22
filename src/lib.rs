@@ -1,8 +1,8 @@
 //! # browser-crawler
 //! 
-//! A decoupled, 4-phase modular Rust library for web browsing, token-optimized HTML-to-Markdown 
-//! Intermediate Representation (IR) generation, extensible content analysis callbacks, and pluggable storage sinks.
-//! Supports Playwright-style dynamic JavaScript/CSS rendering and anti-bot stealth evasion via Headless Chrome.
+//! A high-performance Rust web browsing library and AI Intermediate Representation (IR) generator.
+//! Built around a streaming builder architecture (`Browser::builder()`) with support for static HTTP fetching,
+//! dynamic JavaScript rendering, and anti-bot stealth mode via Headless Chrome.
 //! 
 //! ## Interleaved Queue-Based Streaming Architecture
 //! 

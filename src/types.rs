@@ -14,7 +14,7 @@ pub enum RenderMode {
     Dynamic,
 }
 
-/// Playwright-style wait lifecycle condition for dynamic page rendering.
+/// Wait lifecycle condition for dynamic page rendering.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WaitUntil {
     /// Waits until there are no active network requests for at least 500ms.
@@ -56,6 +56,8 @@ pub struct RenderOptions {
     pub timeout_strategy: TimeoutStrategy,
     /// Enables anti-bot stealth mechanisms (masking `navigator.webdriver`, chrome flags, fingerprinting protection).
     pub stealth: bool,
+    /// Enables debug inspection (logging CDP network responses and console errors).
+    pub debug: bool,
 }
 
 impl Default for RenderOptions {
@@ -66,6 +68,7 @@ impl Default for RenderOptions {
             render_timeout: Duration::from_secs(10),
             timeout_strategy: TimeoutStrategy::ExtractPartial,
             stealth: true,
+            debug: false,
         }
     }
 }

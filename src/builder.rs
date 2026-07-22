@@ -32,10 +32,6 @@ impl Browser {
     }
 
     /// Asynchronously runs the 4-phase queue-based streaming browser pipeline.
-    ///
-    /// Pushes `start_url` onto the navigation queue, pops tasks one by one to fetch HTML,
-    /// extract `PageIR` markdown (Phase 2), execute analysis callback (Phase 3), export payload (Phase 4),
-    /// scan for new same-domain links, and push discovered links back to the queue until finished.
     pub async fn run(&self) -> Result<CrawlSummary, String> {
         let dummy_callback: AnalysisCallback = Box::new(|_| Box::pin(async { Ok(()) }));
         let callback_ref = self.callback.as_ref().unwrap_or(&dummy_callback);
@@ -78,7 +74,6 @@ impl BrowserBuilder {
     }
 
     /// Sets the target directory path for file export.
-    /// Defaults to `./out`. If a custom `exporter` is supplied, `output_dir` is ignored.
     pub fn output_dir<P: AsRef<Path>>(mut self, dir: P) -> Self {
         self.output_dir = Some(dir.as_ref().to_path_buf());
         self
@@ -96,7 +91,7 @@ impl BrowserBuilder {
         self
     }
 
-    /// Sets the Playwright-style wait condition for dynamic JS rendering.
+    /// Sets the wait condition for dynamic JS rendering.
     pub fn wait_until(mut self, wait: WaitUntil) -> Self {
         self.render_options.wait_until = wait;
         self
@@ -123,6 +118,13 @@ impl BrowserBuilder {
     /// Enables or disables anti-bot stealth mode (default is `true`).
     pub fn stealth(mut self, enabled: bool) -> Self {
         self.render_options.stealth = enabled;
+        self
+    }
+
+    /// Enables or disables Debug Inspector mode (default is `false`).
+    /// Logs Chrome CDP network responses and browser console errors during rendering.
+    pub fn debug(mut self, enabled: bool) -> Self {
+        self.render_options.debug = enabled;
         self
     }
 
@@ -196,6 +198,7 @@ mod tests {
             .start_url("https://example.com")
             .render_mode(RenderMode::Dynamic)
             .stealth(true)
+            .debug(true)
             .wait_for_selector("main")
             .build();
         assert!(browser.is_ok());

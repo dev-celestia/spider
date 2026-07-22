@@ -4,7 +4,7 @@ use tokio::time::timeout;
 use crate::stealth::{stealth_chrome_args, STEALTH_JS};
 use crate::types::{RenderMode, RenderOptions, TimeoutStrategy, WaitUntil};
 
-/// Unified HTML page fetcher supporting both static HTTP requests and Headless Chrome dynamic rendering with anti-bot stealth.
+/// Unified HTML page fetcher supporting both static HTTP requests and Headless Chrome dynamic rendering with anti-bot stealth and debug logging.
 pub struct PageFetcher {
     client: Client,
     options: RenderOptions,
@@ -18,13 +18,30 @@ impl PageFetcher {
 
     /// Fetches HTML source code for the specified URL according to the configured [`RenderMode`].
     pub async fn fetch_html(&self, url: &str) -> Result<String, String> {
+        if self.options.debug {
+            println!(
+                "[DEBUG Renderer] Mode: {:?}, Stealth: {}, Timeout: {:?}, Wait: {:?}",
+                self.options.render_mode, self.options.stealth, self.options.render_timeout, self.options.wait_until
+            );
+        }
+
         match self.options.render_mode {
             RenderMode::Static => self.fetch_static(url).await,
             RenderMode::Dynamic => match self.fetch_dynamic(url).await {
-                Ok(html) => Ok(html),
+                Ok(html) => {
+                    if self.options.debug {
+                        let _ = tokio::fs::create_dir_all("out").await;
+                        let _ = tokio::fs::write("out/debug_dump.html", &html).await;
+                        println!(
+                            "[DEBUG Dump] Dumped {} bytes of live rendered DOM to out/debug_dump.html",
+                            html.len()
+                        );
+                    }
+                    Ok(html)
+                }
                 Err(err) => {
                     eprintln!(
-                        "[Warning] Headless Chrome execution encountered error for {}: {}. Evaluating timeout strategy...",
+                        "[Warning] Headless Chrome execution error for {}: {}. Evaluating timeout strategy...",
                         url, err
                     );
                     match self.options.timeout_strategy {
@@ -41,6 +58,10 @@ impl PageFetcher {
 
     /// Fetches raw static HTML using `reqwest`.
     async fn fetch_static(&self, url: &str) -> Result<String, String> {
+        if self.options.debug {
+            println!("[DEBUG Network] GET {} (Static HTTP)", url);
+        }
+
         let resp = self
             .client
             .get(url)
@@ -48,12 +69,20 @@ impl PageFetcher {
             .await
             .map_err(|e| format!("HTTP request failed for '{url}': {e}"))?;
 
+        if self.options.debug {
+            println!(
+                "[DEBUG Network] Response Status: {} for {}",
+                resp.status(),
+                url
+            );
+        }
+
         resp.text()
             .await
             .map_err(|e| format!("Failed to read response body for '{url}': {e}"))
     }
 
-    /// Fetches fully rendered DOM HTML using Headless Chrome CDP driver with anti-bot stealth mechanisms.
+    /// Fetches fully rendered DOM HTML using Headless Chrome CDP driver with anti-bot stealth mechanisms and debug inspection.
     async fn fetch_dynamic(&self, url: &str) -> Result<String, String> {
         let url_owned = url.to_string();
         let options = self.options.clone();
@@ -63,6 +92,10 @@ impl PageFetcher {
             use headless_chrome::{Browser as HeadlessBrowser, LaunchOptions};
             use std::ffi::OsStr;
             use std::time::{Duration, Instant};
+
+            if options.debug {
+                println!("[DEBUG Headless] Launching Chrome CDP for {}", url_owned);
+            }
 
             let mut chrome_args = Vec::new();
             if options.stealth {
@@ -102,14 +135,22 @@ impl PageFetcher {
             // Perform smart wait according to WaitUntil option
             match options.wait_until {
                 WaitUntil::Selector(ref selector) => {
+                    if options.debug {
+                        println!("[DEBUG Wait] Waiting for element selector: {}", selector);
+                    }
                     let remaining = timeout_limit.saturating_sub(start_time.elapsed());
                     let _ = tab.wait_for_element_with_custom_timeout(selector, remaining);
                 }
                 WaitUntil::Delay(duration) => {
+                    if options.debug {
+                        println!("[DEBUG Wait] Sleeping for delay {:?}", duration);
+                    }
                     std::thread::sleep(duration);
                 }
                 WaitUntil::DomContentLoaded | WaitUntil::NetworkIdle => {
-                    // Smart DOM settlement poller: poll DOM content length until DOM settles or timeout limit is reached
+                    if options.debug {
+                        println!("[DEBUG Wait] Waiting for DOM settlement polling...");
+                    }
                     let poll_interval = Duration::from_millis(300);
                     let mut last_len = 0;
                     let mut stable_count = 0;
@@ -117,10 +158,16 @@ impl PageFetcher {
                     while start_time.elapsed() < timeout_limit {
                         if let Ok(content) = tab.get_content() {
                             let len = content.len();
-                            // If DOM has rendered content (>300 chars) and length is stable across consecutive polls
                             if len > 300 && len == last_len {
                                 stable_count += 1;
                                 if stable_count >= 2 {
+                                    if options.debug {
+                                        println!(
+                                            "[DEBUG Settlement] DOM settled at {} bytes after {:?}",
+                                            len,
+                                            start_time.elapsed()
+                                        );
+                                    }
                                     break;
                                 }
                             } else {
@@ -133,12 +180,10 @@ impl PageFetcher {
                 }
             }
 
-            // Always capture and return the live DOM content from Chrome!
             tab.get_content()
                 .map_err(|e| format!("Failed to retrieve DOM content for '{url_owned}': {e}"))
         });
 
-        // Add 2-second grace period to outer tokio timeout so inner Chrome thread finishes capturing DOM
         let max_task_timeout = self.options.render_timeout + std::time::Duration::from_secs(3);
 
         match timeout(max_task_timeout, render_task).await {

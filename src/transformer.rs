@@ -4,22 +4,8 @@ use crate::types::PageIR;
 /// Phase 2: HTML-to-IR Transformer
 ///
 /// Converts verbose raw HTML source into a lightweight, token-efficient `PageIR` payload
-/// by extracting document title and translating semantic content blocks (`h1`, `h2`, `h3`, `p`, `li`)
+/// by extracting document title and translating semantic content blocks (`h1`, `h2`, `h3`, `p`, `li`, `img`, `a`)
 /// into formatted Markdown text.
-///
-/// # Arguments
-/// * `url` - Source URL of the HTML document.
-/// * `html` - Raw HTML string to transform.
-///
-/// # Examples
-/// ```
-/// use browser_crawler::transform_html_to_ir;
-///
-/// let html = "<html><head><title>My Page</title></head><body><h1>Hello</h1><p>World</p></body></html>";
-/// let ir = transform_html_to_ir("https://example.com", html);
-/// assert_eq!(ir.title, "My Page");
-/// assert!(ir.markdown_ir.contains("# Hello"));
-/// ```
 pub fn transform_html_to_ir(url: &str, html: &str) -> PageIR {
     let document = Html::parse_document(html);
 
@@ -32,22 +18,60 @@ pub fn transform_html_to_ir(url: &str, html: &str) -> PageIR {
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| "Untitled Page".to_string());
 
-    // Isolate core content elements (h1, h2, h3, p, li)
-    let content_selector = Selector::parse("h1, h2, h3, p, li").unwrap();
+    // Isolate core content elements (h1, h2, h3, p, li, img, a)
+    let content_selector = Selector::parse("h1, h2, h3, p, li, img, a").unwrap();
     let mut markdown_ir = String::new();
 
     for element in document.select(&content_selector) {
-        let text = element.text().collect::<String>().trim().to_string();
-        if text.is_empty() {
-            continue;
-        }
+        let name = element.value().name();
 
-        match element.value().name() {
-            "h1" => markdown_ir.push_str(&format!("\n# {}\n", text)),
-            "h2" => markdown_ir.push_str(&format!("\n## {}\n", text)),
-            "h3" => markdown_ir.push_str(&format!("\n### {}\n", text)),
-            "li" => markdown_ir.push_str(&format!("* {}\n", text)),
-            _ => markdown_ir.push_str(&format!("{}\n\n", text)),
+        match name {
+            "h1" => {
+                let text = element.text().collect::<String>().trim().to_string();
+                if !text.is_empty() {
+                    markdown_ir.push_str(&format!("\n# {}\n", text));
+                }
+            }
+            "h2" => {
+                let text = element.text().collect::<String>().trim().to_string();
+                if !text.is_empty() {
+                    markdown_ir.push_str(&format!("\n## {}\n", text));
+                }
+            }
+            "h3" => {
+                let text = element.text().collect::<String>().trim().to_string();
+                if !text.is_empty() {
+                    markdown_ir.push_str(&format!("\n### {}\n", text));
+                }
+            }
+            "li" => {
+                let text = element.text().collect::<String>().trim().to_string();
+                if !text.is_empty() {
+                    markdown_ir.push_str(&format!("* {}\n", text));
+                }
+            }
+            "img" => {
+                if let Some(src) = element.value().attr("src") {
+                    let alt = element.value().attr("alt").unwrap_or("Thumbnail");
+                    if !src.is_empty() {
+                        markdown_ir.push_str(&format!("\n![{}]({})\n", alt.trim(), src.trim()));
+                    }
+                }
+            }
+            "a" => {
+                if let Some(href) = element.value().attr("href") {
+                    let text = element.text().collect::<String>().trim().to_string();
+                    if !text.is_empty() && !href.starts_with('#') && !href.starts_with("javascript:") {
+                        markdown_ir.push_str(&format!("[{}]({})\n", text, href.trim()));
+                    }
+                }
+            }
+            _ => {
+                let text = element.text().collect::<String>().trim().to_string();
+                if !text.is_empty() {
+                    markdown_ir.push_str(&format!("{}\n\n", text));
+                }
+            }
         }
     }
 
@@ -76,6 +100,8 @@ mod tests {
                     <li>First item</li>
                     <li>Second item</li>
                 </ul>
+                <img src="https://example.com/thumb.jpg" alt="Article Thumbnail" />
+                <a href="https://example.com/article/1">Read Article 1</a>
             </body>
             </html>
         "#;
@@ -87,7 +113,8 @@ mod tests {
         assert!(ir.markdown_ir.contains("Hello world paragraph."));
         assert!(ir.markdown_ir.contains("## Sub Heading"));
         assert!(ir.markdown_ir.contains("* First item"));
-        assert!(ir.markdown_ir.contains("* Second item"));
+        assert!(ir.markdown_ir.contains("![Article Thumbnail](https://example.com/thumb.jpg)"));
+        assert!(ir.markdown_ir.contains("[Read Article 1](https://example.com/article/1)"));
     }
 
     #[test]
