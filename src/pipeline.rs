@@ -1,28 +1,74 @@
 use reqwest::Client;
 use std::sync::Arc;
 
+use crate::exporter::FileStorageExporter;
 use crate::transformer::transform_html_to_ir;
 use crate::types::{AnalysisCallback, SitemapNode, StorageExporter};
 
-/// Crawler pipeline engine orchestrating Phase 2–4 execution.
+/// Builder for constructing [`BrowserPipeline`] instances.
+#[derive(Default)]
+pub struct BrowserPipelineBuilder {
+    user_agent: String,
+    exporter: Option<Arc<dyn StorageExporter>>,
+}
+
+impl BrowserPipelineBuilder {
+    /// Creates a new `BrowserPipelineBuilder` with default settings.
+    pub fn new() -> Self {
+        Self {
+            user_agent: "RustAIBrowser/1.0".to_string(),
+            exporter: None,
+        }
+    }
+
+    /// Sets the HTTP User-Agent string.
+    pub fn user_agent(mut self, ua: impl Into<String>) -> Self {
+        self.user_agent = ua.into();
+        self
+    }
+
+    /// Sets the Phase 4 [`StorageExporter`].
+    pub fn exporter(mut self, exporter: Arc<dyn StorageExporter>) -> Self {
+        self.exporter = Some(exporter);
+        self
+    }
+
+    /// Builds the [`BrowserPipeline`].
+    pub fn build(self) -> BrowserPipeline {
+        let client = Client::builder()
+            .user_agent(&self.user_agent)
+            .build()
+            .unwrap_or_default();
+
+        let exporter = self
+            .exporter
+            .unwrap_or_else(|| Arc::new(FileStorageExporter::default()));
+
+        BrowserPipeline { client, exporter }
+    }
+}
+
+/// Browser pipeline engine orchestrating Phase 2–4 execution.
 ///
 /// Fetches HTML content for URLs in a `SitemapNode` graph, converts them into `PageIR` markdown,
 /// executes user analysis callbacks, and exports payloads to storage sinks.
-pub struct CrawlerPipeline {
+pub struct BrowserPipeline {
     client: Client,
     exporter: Arc<dyn StorageExporter>,
 }
 
-impl CrawlerPipeline {
+/// Backwards-compatible type alias for [`BrowserPipeline`].
+pub type CrawlerPipeline = BrowserPipeline;
+
+impl BrowserPipeline {
+    /// Creates a new `BrowserPipelineBuilder` instance.
+    pub fn builder() -> BrowserPipelineBuilder {
+        BrowserPipelineBuilder::new()
+    }
+
     /// Creates a new pipeline equipped with a specified `StorageExporter`.
     pub fn new(exporter: Arc<dyn StorageExporter>) -> Self {
-        Self {
-            client: Client::builder()
-                .user_agent("RustAICrawler/1.0")
-                .build()
-                .unwrap_or_default(),
-            exporter,
-        }
+        Self::builder().exporter(exporter).build()
     }
 
     /// Asynchronously processes a `SitemapNode` graph recursively.
@@ -87,7 +133,9 @@ mod tests {
         let exporter = Arc::new(TestExporter {
             export_count: count.clone(),
         });
-        let _pipeline = CrawlerPipeline::new(exporter);
+        let _pipeline = BrowserPipeline::new(exporter);
         assert_eq!(count.load(Ordering::SeqCst), 0);
+
+        let _builder_pipeline = BrowserPipeline::builder().build();
     }
 }
