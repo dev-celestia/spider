@@ -1,9 +1,9 @@
-use browser_crawler::Browser;
 use std::env;
+use browser_crawler::Browser;
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    let start_url = "https://0xbuffer.com";
+    let start_url = "https://example.com";
 
     // Allow customizing output directory via first command-line argument, defaulting to "out"
     let out_dir = env::args().nth(1).unwrap_or_else(|| "out".to_string());
@@ -22,8 +22,12 @@ async fn main() -> Result<(), String> {
         })
         .build()?;
 
-    // Execute the full 4-phase pipeline
-    browser.run().await?;
+    // Execute the 4-phase queue-based streaming pipeline
+    let summary = browser.run().await?;
+    println!("\n=== Crawl Summary ===");
+    println!("Pages Processed: {}", summary.pages_processed);
+    println!("Total IR Bytes: {}", summary.total_ir_bytes);
+    println!("Visited URLs: {:?}", summary.visited_urls);
 
     Ok(())
 }

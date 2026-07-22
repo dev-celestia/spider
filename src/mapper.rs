@@ -4,13 +4,15 @@ use scraper::{Html, Selector};
 use std::sync::Arc;
 use url::Url;
 
-use crate::types::SitemapNode;
+use crate::renderer::PageFetcher;
+use crate::types::{RenderOptions, SitemapNode};
 
 /// Builder for constructing [`SiteMapper`] with custom settings.
 #[derive(Debug, Clone)]
 pub struct SiteMapperBuilder {
     max_depth: usize,
     user_agent: String,
+    render_options: RenderOptions,
 }
 
 impl Default for SiteMapperBuilder {
@@ -18,6 +20,7 @@ impl Default for SiteMapperBuilder {
         Self {
             max_depth: 2,
             user_agent: "RustAIBrowser/1.0".to_string(),
+            render_options: RenderOptions::default(),
         }
     }
 }
@@ -40,6 +43,12 @@ impl SiteMapperBuilder {
         self
     }
 
+    /// Sets page rendering configuration.
+    pub fn render_options(mut self, options: RenderOptions) -> Self {
+        self.render_options = options;
+        self
+    }
+
     /// Builds the [`SiteMapper`].
     pub fn build(self) -> SiteMapper {
         let client = Client::builder()
@@ -47,8 +56,10 @@ impl SiteMapperBuilder {
             .build()
             .unwrap_or_default();
 
+        let fetcher = PageFetcher::new(client, self.render_options);
+
         SiteMapper {
-            client,
+            fetcher,
             visited: Arc::new(DashSet::new()),
             max_depth: self.max_depth,
         }
@@ -56,10 +67,8 @@ impl SiteMapperBuilder {
 }
 
 /// Rapid sitemap mapper for Phase 1 link discovery.
-///
-/// Navigates internal site structure while skipping heavy text rendering to ensure high execution speed.
 pub struct SiteMapper {
-    client: Client,
+    fetcher: PageFetcher,
     visited: Arc<DashSet<String>>,
     max_depth: usize,
 }
@@ -87,8 +96,7 @@ impl SiteMapper {
         }
 
         self.visited.insert(current_url.to_string());
-        let response = self.client.get(current_url).send().await.ok()?;
-        let html = response.text().await.ok()?;
+        let html = self.fetcher.fetch_html(current_url).await.ok()?;
 
         let document = Html::parse_document(&html);
         let a_selector = Selector::parse("a[href]").ok()?;

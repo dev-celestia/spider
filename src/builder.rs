@@ -1,16 +1,19 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::exporter::FileStorageExporter;
-use crate::mapper::SiteMapper;
 use crate::pipeline::BrowserPipeline;
-use crate::types::{AnalysisCallback, PageIR, StorageExporter};
+use crate::types::{
+    AnalysisCallback, CrawlSummary, PageIR, RenderMode, RenderOptions, StorageExporter,
+    TimeoutStrategy, WaitUntil,
+};
 
 /// High-level facade for configuring and running the 4-phase Browser pipeline.
 pub struct Browser {
     start_url: String,
-    mapper: SiteMapper,
+    max_depth: usize,
     pipeline: BrowserPipeline,
     callback: Option<AnalysisCallback>,
 }
@@ -28,23 +31,18 @@ impl Browser {
         BrowserBuilder::default()
     }
 
-    /// Asynchronously runs the 4-phase browser crawling pipeline.
+    /// Asynchronously runs the 4-phase queue-based streaming browser pipeline.
     ///
-    /// 1. Maps website structure starting from `start_url` (Phase 1).
-    /// 2. Transforms raw HTML into `PageIR` markdown (Phase 2).
-    /// 3. Triggers the analysis callback hook if provided (Phase 3).
-    /// 4. Exports results to the configured storage sink (Phase 4).
-    pub async fn run(&self) -> Result<(), String> {
-        let sitemap = self
-            .mapper
-            .map_site(&self.start_url)
-            .await
-            .ok_or_else(|| format!("Failed to map site for URL: {}", self.start_url))?;
-
+    /// Pushes `start_url` onto the navigation queue, pops tasks one by one to fetch HTML,
+    /// extract `PageIR` markdown (Phase 2), execute analysis callback (Phase 3), export payload (Phase 4),
+    /// scan for new same-domain links, and push discovered links back to the queue until finished.
+    pub async fn run(&self) -> Result<CrawlSummary, String> {
         let dummy_callback: AnalysisCallback = Box::new(|_| Box::pin(async { Ok(()) }));
         let callback_ref = self.callback.as_ref().unwrap_or(&dummy_callback);
 
-        self.pipeline.process_sitemap(&sitemap, callback_ref).await
+        self.pipeline
+            .run_streaming_crawl(&self.start_url, self.max_depth, callback_ref)
+            .await
     }
 }
 
@@ -57,6 +55,7 @@ pub struct BrowserBuilder {
     output_dir: Option<PathBuf>,
     exporter: Option<Arc<dyn StorageExporter>>,
     callback: Option<AnalysisCallback>,
+    render_options: RenderOptions,
 }
 
 impl BrowserBuilder {
@@ -91,6 +90,42 @@ impl BrowserBuilder {
         self
     }
 
+    /// Sets the rendering mode (`RenderMode::Static` vs `RenderMode::Dynamic`).
+    pub fn render_mode(mut self, mode: RenderMode) -> Self {
+        self.render_options.render_mode = mode;
+        self
+    }
+
+    /// Sets the Playwright-style wait condition for dynamic JS rendering.
+    pub fn wait_until(mut self, wait: WaitUntil) -> Self {
+        self.render_options.wait_until = wait;
+        self
+    }
+
+    /// Shorthand to wait until a specific CSS selector appears in the live DOM.
+    pub fn wait_for_selector(mut self, selector: impl Into<String>) -> Self {
+        self.render_options.wait_until = WaitUntil::Selector(selector.into());
+        self
+    }
+
+    /// Sets the timeout limit for page rendering (default is 10 seconds).
+    pub fn render_timeout(mut self, timeout: Duration) -> Self {
+        self.render_options.render_timeout = timeout;
+        self
+    }
+
+    /// Sets the recovery action executed when page rendering times out.
+    pub fn timeout_strategy(mut self, strategy: TimeoutStrategy) -> Self {
+        self.render_options.timeout_strategy = strategy;
+        self
+    }
+
+    /// Enables or disables anti-bot stealth mode (default is `true`).
+    pub fn stealth(mut self, enabled: bool) -> Self {
+        self.render_options.stealth = enabled;
+        self
+    }
+
     /// Sets an async callback function for Phase 3 content analysis.
     pub fn analysis_callback(mut self, callback: AnalysisCallback) -> Self {
         self.callback = Some(callback);
@@ -98,20 +133,6 @@ impl BrowserBuilder {
     }
 
     /// Helper method allowing inline async closures for Phase 3 content analysis.
-    ///
-    /// # Examples
-    /// ```
-    /// use browser_crawler::Browser;
-    ///
-    /// let browser = Browser::builder()
-    ///     .start_url("https://example.com")
-    ///     .on_page(|page_ir| async move {
-    ///         println!("Page URL: {}", page_ir.url);
-    ///         Ok(())
-    ///     })
-    ///     .build()
-    ///     .unwrap();
-    /// ```
     pub fn on_page<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(PageIR) -> Fut + Send + Sync + 'static,
@@ -123,8 +144,6 @@ impl BrowserBuilder {
     }
 
     /// Builds and validates the [`Browser`] instance.
-    ///
-    /// Returns an error string if mandatory options (like `start_url`) are missing.
     pub fn build(self) -> Result<Browser, String> {
         let start_url = self
             .start_url
@@ -134,11 +153,6 @@ impl BrowserBuilder {
         let user_agent = self
             .user_agent
             .unwrap_or_else(|| "RustAIBrowser/1.0".to_string());
-
-        let mapper = SiteMapper::builder()
-            .max_depth(max_depth)
-            .user_agent(&user_agent)
-            .build();
 
         let exporter: Arc<dyn StorageExporter> = match self.exporter {
             Some(exp) => exp,
@@ -150,12 +164,13 @@ impl BrowserBuilder {
 
         let pipeline = BrowserPipeline::builder()
             .user_agent(&user_agent)
+            .render_options(self.render_options)
             .exporter(exporter)
             .build();
 
         Ok(Browser {
             start_url,
-            mapper,
+            max_depth,
             pipeline,
             callback: self.callback,
         })
@@ -179,6 +194,9 @@ mod tests {
     fn test_browser_builder_defaults() {
         let browser = Browser::builder()
             .start_url("https://example.com")
+            .render_mode(RenderMode::Dynamic)
+            .stealth(true)
+            .wait_for_selector("main")
             .build();
         assert!(browser.is_ok());
     }

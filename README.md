@@ -3,44 +3,64 @@
 [![Rust](https://img.shields.io/badge/rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A decoupled, 4-phase modular Rust library for web browsing and AI Intermediate Representation (IR) generation. Built around an elegant **Builder Pattern** (`Browser::builder()`) for fast async link discovery, noise-free Markdown extraction for Large Language Models (LLMs), real-time content analysis hooks, and pluggable storage sinks.
+A decoupled, 4-phase modular Rust library for web browsing and AI Intermediate Representation (IR) generation. Built around an **Interleaved Queue-Based Streaming Architecture** (`Browser::builder()`) with support for static HTTP fetching, **Playwright-style dynamic rendering**, and **Anti-Bot Stealth Mode** via Headless Chrome.
 
 ---
 
-## 📐 Architecture Overview
+## 📐 Queue-Based Navigation & Rendering Pipeline
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│ PHASE 1: Sitemap Discovery                                                       │
-│ Landing Page ──> Fast Link Extractor ──> Recursive Sitemap Node Graph             │
-└────────────────────────────────────────┬─────────────────────────────────────────┘
-                                         │
-┌────────────────────────────────────────▼─────────────────────────────────────────┐
-│ PHASE 2: IR Data Extraction                                                      │
-│ Node URL ──> Fetch HTML ──> Prune Noise (CSS/JS) ──> Convert to Compact Markdown │
-└────────────────────────────────────────┬─────────────────────────────────────────┘
-                                         │
-┌────────────────────────────────────────▼─────────────────────────────────────────┐
-│ PHASE 3: Content Analysis Hook                                                   │
-│ PageIR Payload ──> Async Callback ──> Optional LLM Prompting / Summary Logic     │
-└────────────────────────────────────────┬─────────────────────────────────────────┘
-                                         │
-┌────────────────────────────────────────▼─────────────────────────────────────────┐
-│ PHASE 4: Export & Storage Interface                                              │
-│ Output Stream ──> Vector Database / Local Storage / Custom Data Sink             │
-└──────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│ QUEUE-BASED INTERLEAVED CRAWL LOOP                                                        │
+│                                                                                          │
+│ ┌──────────────────────────────────────────────────────────────────────────────────────┐ │
+│ │ 1. Push Landing Page Task (start_url, depth=0) into Navigation Queue                  │ │
+│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
+│                                            │                                             │
+│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
+│ │ 2. WHILE Queue is NOT Empty: POP Next CrawlTask (url, depth)                         │ │
+│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
+│                                            │                                             │
+│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
+│ │ 3. Fetch HTML (Static / Dynamic Headless Chrome with Stealth)                          │ │
+│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
+│                                            │                                             │
+│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
+│ │ 4. Phase 2: Extract PageIR (Title, Noise Pruning, Markdown IR)                       │ │
+│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
+│                                            │                                             │
+│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
+│ │ 5. Phase 3: Execute Content Analysis Callback (.on_page / LLM Prompting)              │ │
+│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
+│                                            │                                             │
+│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
+│ │ 6. Phase 4: Export Payload to Disk (./out / Vector DB)                                │ │
+│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
+│                                            │                                             │
+│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
+│ │ 7. Scan HTML for Same-Domain Links (<a href="...">)                                   │ │
+│ │    For each unvisited link (if depth < max_depth):                                     │ │
+│ │    ├──> Mark Visited                                                                   │ │
+│ │    └──> PUSH (link, depth + 1) onto Navigation Queue                                   │ │
+│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
+│                                            │                                             │
+│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
+│ │ 8. Repeat POP from Queue until Queue is Empty & Crawl Summary is Returned              │ │
+│ └──────────────────────────────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## 🌟 Key Features
 
-- **Fluent Builder Pattern (`Browser::builder()`)**: Configure start URL, crawling depth, custom User-Agent, output directories, and callback hooks via a unified, readable API.
-- **Modular Sub-Builders**: Fine-grained sub-builders (`SiteMapper::builder()`, `BrowserPipeline::builder()`, `FileStorageExporter::builder()`) for custom pipelines.
-- **Default Output Directory (`./out`)**: Standard built-in file exporter automatically creates and targets `./out`, with support for custom directory paths.
-- **Fast Non-Blocking Discovery**: Concurrent link discovery with thread-safe visited tracking (`DashSet`) and domain host scoping.
-- **Token-Optimized AI IR**: Strips HTML scripts, styles, and wrapper noise into clean, compact Markdown suitable for LLM prompt context and vector embeddings.
-- **Asynchronous Analysis Hooks**: Inline `.on_page(|page_ir| async move { ... })` callbacks for real-time LLM inference, summarization, or entity extraction.
+- **Queue-Based Push/Pop Navigation**: Discovered links are pushed onto a navigation queue during page scanning, and popped one by one for real-time processing and instant disk export.
+- **Fluent Builder Pattern (`Browser::builder()`)**: Configure start URL, crawling depth, custom User-Agent, output directories, rendering modes, stealth flags, and callback hooks.
+- **Anti-Bot Stealth Mode (`.stealth(true)`)**: Bypasses bot detection by stripping `--disable-blink-features=AutomationControlled`, masking `navigator.webdriver`, spoofing `window.chrome`, `navigator.plugins`, and WebGL vendor flags.
+- **Playwright-Style Dynamic Rendering**: Executes client-side JavaScript, CSS layout evaluations, and SPA hydration (React, Vue, Angular) via Headless Chrome.
+- **Playwright-Grade Wait Lifecycles (`WaitUntil`)**: Wait for `NetworkIdle` (0 active requests for 500ms), `DomContentLoaded`, or custom CSS selectors (`WaitUntil::Selector("main")`).
+- **Token-Optimized AI IR**: Strips HTML scripts, styles, and wrapper noise into clean, compact Markdown suitable for LLMs.
+- **Pluggable Storage Exporters**: Built-in file exporter (defaulting to `./out`) and extensible `StorageExporter` trait.
 
 ---
 
@@ -57,185 +77,51 @@ async-trait = "0.1"
 
 ---
 
-## 🚀 Quick Start (Builder Pattern)
+## 🚀 Quick Start (Queue Streaming Crawl)
 
-Execute a full 4-phase crawl in a few lines of clean Rust code:
+Execute a full 4-phase crawl using the Builder API:
 
 ```rust
-use browser_crawler::Browser;
+use std::time::Duration;
+use browser_crawler::{Browser, RenderMode, TimeoutStrategy, WaitUntil};
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    // Configure and build the Browser instance using the fluent Builder API
     let browser = Browser::builder()
         .start_url("https://example.com")
         .max_depth(2)
-        .user_agent("RustAIBrowser/1.0")
-        .output_dir("out") // Defaults to "./out"
+        .render_mode(RenderMode::Dynamic)
+        .stealth(true)
+        .wait_until(WaitUntil::NetworkIdle)
+        .render_timeout(Duration::from_secs(10))
+        .timeout_strategy(TimeoutStrategy::ExtractPartial)
         .on_page(|page_ir| async move {
-            println!("[Phase 3] Processing URL: {}", page_ir.url);
-            println!("Extracted Text Size: {} chars", page_ir.markdown_ir.len());
+            println!("[Phase 3] Processed URL: {}", page_ir.url);
+            println!("Title: {}", page_ir.title);
             Ok(())
         })
         .build()?;
 
-    // Execute the 4-phase pipeline
-    browser.run().await?;
+    // Execute the queue-based pipeline
+    let summary = browser.run().await?;
+    println!("Pages Processed: {}", summary.pages_processed);
+    println!("Total IR Bytes: {}", summary.total_ir_bytes);
+    println!("Visited URLs: {:?}", summary.visited_urls);
     Ok(())
 }
 ```
 
 ---
 
-## 📚 Builder API & Modular Components
+## 📊 Summary Metrics (`CrawlSummary`)
 
-### Builder Summary Table
-
-| Builder Type | Entry Point | Primary Configuration Methods |
-| --- | --- | --- |
-| **`BrowserBuilder`** | `Browser::builder()` | `.start_url()`, `.max_depth()`, `.user_agent()`, `.output_dir()`, `.on_page()`, `.exporter()`, `.build()` |
-| **`SiteMapperBuilder`** | `SiteMapper::builder()` | `.max_depth()`, `.user_agent()`, `.build()` |
-| **`BrowserPipelineBuilder`** | `BrowserPipeline::builder()` | `.user_agent()`, `.exporter()`, `.build()` |
-| **`FileStorageExporterBuilder`** | `FileStorageExporter::builder()` | `.output_dir()`, `.build()` |
-
----
-
-### Phase 1: Sitemap Discovery (`SiteMapper::builder()`)
-
-`SiteMapper` traverses internal hyperlinks recursively while maintaining high execution speed by avoiding full text parsing during mapping.
+When `browser.run().await` completes, it returns a `CrawlSummary` struct:
 
 ```rust
-use browser_crawler::SiteMapper;
-
-let mapper = SiteMapper::builder()
-    .max_depth(3)
-    .user_agent("CustomBot/1.0")
-    .build();
-
-if let Some(sitemap) = mapper.map_site("https://example.com").await {
-    println!("Root URL: {}, Children: {}", sitemap.url, sitemap.children.len());
-}
-```
-
----
-
-### Phase 2: HTML-to-IR Transformer (`transform_html_to_ir`)
-
-Converts raw HTML string content into token-efficient `PageIR`.
-
-```rust
-use browser_crawler::transform_html_to_ir;
-
-let html = r#"
-    <html>
-      <head><title>Documentation Page</title></head>
-      <body>
-        <h1>API Reference</h1>
-        <p>This is the core document context.</p>
-        <ul>
-          <li>Feature 1</li>
-          <li>Feature 2</li>
-        </ul>
-      </body>
-    </html>
-"#;
-
-let page_ir = transform_html_to_ir("https://example.com/docs", html);
-
-assert_eq!(page_ir.title, "Documentation Page");
-assert!(page_ir.markdown_ir.contains("# API Reference"));
-assert!(page_ir.markdown_ir.contains("* Feature 1"));
-```
-
----
-
-### Phase 3: Content Analysis Hooks (`.on_page(...)` / `AnalysisCallback`)
-
-`BrowserBuilder` allows inline async closures via `.on_page(...)`:
-
-```rust
-let browser = Browser::builder()
-    .start_url("https://example.com")
-    .on_page(|ir| async move {
-        println!("Analyzing Page Title: {}", ir.title);
-        // Integrate OpenAI, Anthropic, or local LLM inference here
-        Ok(())
-    })
-    .build()?;
-```
-
----
-
-### Phase 4: Storage Exporters (`FileStorageExporter::builder()` / `StorageExporter`)
-
-#### Using `FileStorageExporter`
-
-- **Default directory (`./out`)**:
-  ```rust
-  let browser = Browser::builder()
-      .start_url("https://example.com")
-      .output_dir("out") // Defaults to "./out"
-      .build()?;
-  ```
-- **Custom output directory**:
-  ```rust
-  let exporter = FileStorageExporter::builder()
-      .output_dir("my_custom_folder")
-      .build();
-
-  let browser = Browser::builder()
-      .start_url("https://example.com")
-      .exporter(Arc::new(exporter))
-      .build()?;
-  ```
-
-#### Implementing a Custom Vector DB Exporter:
-
-```rust
-use browser_crawler::{StorageExporter, PageIR};
-
-struct VectorDbExporter {
-    db_client: MyVectorDbClient,
-}
-
-#[async_trait::async_trait]
-impl StorageExporter for VectorDbExporter {
-    async fn export(&self, ir: &PageIR) -> Result<(), String> {
-        let embedding = generate_embedding(&ir.markdown_ir).await?;
-        self.db_client
-            .insert_document(&ir.url, &ir.title, &ir.markdown_ir, embedding)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    }
-}
-```
-
----
-
-## 🛠️ Data Structures Reference
-
-### `Browser` & `BrowserBuilder`
-```rust
-pub struct Browser { /* ... */ }
-pub struct BrowserBuilder { /* ... */ }
-```
-
-### `SitemapNode`
-```rust
-pub struct SitemapNode {
-    pub url: String,
-    pub depth: usize,
-    pub children: Vec<SitemapNode>,
-}
-```
-
-### `PageIR`
-```rust
-pub struct PageIR {
-    pub url: String,
-    pub title: String,
-    pub markdown_ir: String,
+pub struct CrawlSummary {
+    pub pages_processed: usize,
+    pub total_ir_bytes: usize,
+    pub visited_urls: Vec<String>,
 }
 ```
 
@@ -243,14 +129,19 @@ pub struct PageIR {
 
 ## 🧪 Running Examples & Tests
 
-### Default Run (Outputs to `./out`)
+### Basic Interleaved Crawl (Outputs to `./out`)
 ```bash
 cargo run --example basic_crawl
 ```
 
-### Custom Directory Run
+### Dynamic Crawl Example (Headless Chrome)
 ```bash
-cargo run --example basic_crawl -- my_export_dir
+cargo run --example dynamic_crawl
+```
+
+### Stealth Crawl Example
+```bash
+cargo run --example stealth_crawl
 ```
 
 ### Run Unit & Doc Tests
