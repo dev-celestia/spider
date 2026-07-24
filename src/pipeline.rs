@@ -90,6 +90,12 @@ impl BrowserPipeline {
         Self::builder().exporter(exporter).build()
     }
 
+    /// Fetches a single page URL and converts it to a token-optimized [`crate::types::PageIR`].
+    pub async fn fetch_page(&self, url: &str) -> Result<crate::types::PageIR, String> {
+        let html = self.fetcher.fetch_html(url).await?;
+        Ok(transform_html_to_ir(url, &html))
+    }
+
     /// Executes an interleaved, queue-based streaming crawl starting at `start_url`.
     ///
     /// Pushes `start_url` onto the navigation queue, pops tasks one by one to fetch HTML,

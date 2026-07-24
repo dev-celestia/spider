@@ -196,3 +196,58 @@ impl PageFetcher {
         }
     }
 }
+
+/// Asynchronously fetches a single webpage and transforms it into a token-optimized [`PageIR`] payload.
+///
+/// This convenience function executes a one-off page fetch (using static HTTP or dynamic rendering
+/// according to the provided [`RenderOptions`]) without constructing a full recursive crawling pipeline.
+///
+/// # Arguments
+///
+/// * `url` - The target web URL string to fetch and parse.
+/// * `options` - Configuration options specifying render mode, timeouts, wait strategies, and anti-bot stealth.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if HTTP connection fails, Headless Chrome execution encounters an unrecoverable error,
+/// or network request times out.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use browser_crawler::{crawl_single_page, RenderOptions, RenderMode};
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), String> {
+///     let options = RenderOptions {
+///         render_mode: RenderMode::Static,
+///         ..Default::default()
+///     };
+///     let page_ir = crawl_single_page("https://example.com", &options).await?;
+///     println!("Page Title: {}", page_ir.title);
+///     println!("Markdown Content:\n{}", page_ir.markdown_ir);
+///     Ok(())
+/// }
+/// ```
+pub async fn crawl_single_page(url: &str, options: &RenderOptions) -> Result<crate::types::PageIR, String> {
+    let client = Client::builder()
+        .user_agent("RustAIBrowser/1.0")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+    let fetcher = PageFetcher::new(client, options.clone());
+    let html = fetcher.fetch_html(url).await?;
+    Ok(crate::transformer::transform_html_to_ir(url, &html))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_page_fetcher_creation() {
+        let client = Client::new();
+        let options = RenderOptions::default();
+        let _fetcher = PageFetcher::new(client, options);
+    }
+}
+

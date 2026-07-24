@@ -40,6 +40,35 @@ impl Browser {
             .run_streaming_crawl(&self.start_url, self.max_depth, callback_ref)
             .await
     }
+
+    /// Asynchronously fetches and transforms a single page at `url` using the browser's pipeline configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - Target URL string to fetch and convert into a [`PageIR`] payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(String)` if page fetching or rendering fails.
+    ///
+    /// # Examples
+    /// ```rust,no_run
+    /// use browser_crawler::Browser;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), String> {
+    ///     let browser = Browser::builder()
+    ///         .start_url("https://example.com")
+    ///         .build()?;
+    ///     
+    ///     let page_ir = browser.fetch_page("https://example.com/about").await?;
+    ///     println!("Title: {}", page_ir.title);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn fetch_page(&self, url: &str) -> Result<PageIR, String> {
+        self.pipeline.fetch_page(url).await
+    }
 }
 
 /// Fluent builder for constructing a [`Browser`] instance.

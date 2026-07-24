@@ -52,9 +52,13 @@ A high-performance Rust web browsing library and AI Intermediate Representation 
 
 ---
 
+---
+
 ## 🌟 Key Features
 
 - **Streaming Queue Navigation**: Discovered links are pushed onto a navigation queue during page scanning, and popped one by one for real-time processing and instant disk export.
+- **Single Page Crawl Utility (`crawl_single_page`)**: One-off fetching and rendering of a single URL without setting up a full multi-page crawler.
+- **Hyperlink Extraction (`extract_links`)**: Scans HTML for valid same-domain absolute links, stripping URL fragments (`#`).
 - **Fluent Builder Pattern (`Browser::builder()`)**: Configure start URL, crawling depth, custom User-Agent, output directories, rendering modes, stealth flags, and callback hooks.
 - **Anti-Bot Stealth Mode (`.stealth(true)`)**: Bypasses bot detection by stripping `--disable-blink-features=AutomationControlled`, masking `navigator.webdriver`, spoofing `window.chrome`, `navigator.plugins`, and WebGL vendor flags.
 - **Dynamic Headless Rendering**: Executes client-side JavaScript, CSS layout evaluations, and SPA hydration (React, Vue, Angular) via Headless Chrome.
@@ -62,6 +66,15 @@ A high-performance Rust web browsing library and AI Intermediate Representation 
 - **Debug Inspector Mode (`.debug(true)` / `--debug`)**: Logs Chrome CDP rendering steps, network responses, and DOM settlement events, dumping raw HTML to `./out/debug_dump.html`.
 - **Token-Optimized AI IR**: Strips HTML scripts, styles, and wrapper noise into clean, compact Markdown (including article cards, links, and image thumbnails) suitable for LLMs.
 - **Pluggable Storage Exporters**: Built-in file exporter (defaulting to `./out`) and extensible `StorageExporter` trait.
+
+---
+
+## 📚 Documentation
+
+For complete detailed guides and API specifications, see:
+
+- 📖 [**Full Usage Guide (`docs/USAGE.md`)**](file:///Users/arham/Desktop/project/browser-crawler/docs/USAGE.md)
+- 📑 [**API Reference (`docs/API.md`)**](file:///Users/arham/Desktop/project/browser-crawler/docs/API.md)
 
 ---
 
@@ -80,13 +93,13 @@ async-trait = "0.1"
 
 ## 🚀 Quick Start
 
-Execute a web crawl using the example binary:
+### 1. Multi-Page Streaming Crawl Example
 
 ```bash
 cargo run --example example
 ```
 
-### Code Overview (`examples/example.rs`)
+#### Code Overview (`examples/example.rs`)
 
 ```rust
 use std::time::Duration;
@@ -117,6 +130,69 @@ async fn main() -> Result<(), String> {
     Ok(())
 }
 ```
+
+### 2. Single Page Crawl & Link Extraction Utility
+
+```bash
+cargo run --example single_page
+```
+
+#### Code Overview (`examples/single_page.rs`)
+
+```rust
+use browser_crawler::{crawl_single_page, extract_links, Browser, RenderMode, RenderOptions};
+
+#[tokio::main]
+async fn main() -> Result<(), String> {
+    // 1. One-off single page fetch
+    let options = RenderOptions {
+        render_mode: RenderMode::Static,
+        ..Default::default()
+    };
+    let page_ir = crawl_single_page("https://example.com", &options).await?;
+    println!("Title: {}", page_ir.title);
+
+    // 2. Extract same-domain links
+    let html = r#"<a href="/about">About</a><a href="https://example.com/docs">Docs</a>"#;
+    let links = extract_links("https://example.com", html)?;
+    println!("Extracted links: {:?}", links);
+
+    // 3. Fetch single page using Browser instance
+    let browser = Browser::builder().start_url("https://example.com").build()?;
+    let fetched = browser.fetch_page("https://example.com/about").await?;
+    println!("Fetched: {}", fetched.title);
+
+    Ok(())
+}
+```
+
+---
+
+## 🛠️ Public Utility Functions
+
+### `crawl_single_page`
+
+```rust
+pub async fn crawl_single_page(url: &str, options: &RenderOptions) -> Result<PageIR, String>
+```
+
+Asynchronously fetches a single page without setting up a multi-page crawler. Supports both static HTTP and dynamic Headless Chrome rendering.
+
+### `extract_links`
+
+```rust
+pub fn extract_links(base_url: &str, html: &str) -> Result<Vec<String>, String>
+```
+
+Parses HTML and extracts all valid same-domain absolute hyperlinks, stripping URL fragments (`#`).
+
+### `Browser::fetch_page`
+
+```rust
+pub async fn fetch_page(&self, url: &str) -> Result<PageIR, String>
+```
+
+Fetches a single page using a pre-configured `Browser` instance.
 
 ---
 
@@ -155,6 +231,11 @@ pub struct CrawlSummary {
 cargo run --example example
 ```
 
+### Single Page Utility Run
+```bash
+cargo run --example single_page
+```
+
 ### Debug Inspection Mode
 ```bash
 cargo run --example example -- --debug
@@ -180,3 +261,4 @@ cargo test
 ## 📄 License
 
 This project is licensed under the MIT License.
+

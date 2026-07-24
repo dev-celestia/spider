@@ -1,4 +1,5 @@
 use scraper::{Html, Selector, ElementRef};
+use url::Url;
 use crate::types::PageIR;
 
 /// Checks if an element is contained within an ignored tag (script, style, head, noscript, template).
@@ -172,6 +173,70 @@ pub fn transform_html_to_ir(url: &str, html: &str) -> PageIR {
     }
 }
 
+/// Scans an HTML document string and extracts all valid, same-domain absolute hyperlinks.
+///
+/// Resolves relative `href` paths against `base_url` and filters out cross-domain links, anchor fragments (`#`),
+/// and non-HTTP protocols (`javascript:`, `mailto:`).
+///
+/// # Arguments
+///
+/// * `base_url` - The absolute base URL string used to resolve relative links and enforce same-domain scoping.
+/// * `html` - The raw HTML document content to scan.
+///
+/// # Errors
+///
+/// Returns `Err(String)` if `base_url` cannot be parsed into a valid URL or HTML selection fails.
+///
+/// # Examples
+///
+/// ```rust
+/// use browser_crawler::extract_links;
+///
+/// let html = r#"
+///     <a href="/about">About Us</a>
+///     <a href="https://example.com/docs">Documentation</a>
+///     <a href="https://external.com">External Site</a>
+/// "#;
+/// let links = extract_links("https://example.com/home", html).unwrap();
+/// assert_eq!(links, vec!["https://example.com/about", "https://example.com/docs"]);
+/// ```
+pub fn extract_links(base_url: &str, html: &str) -> Result<Vec<String>, String> {
+    let mut parsed_base = Url::parse(base_url)
+        .map_err(|e| format!("Invalid base URL '{base_url}': {e}"))?;
+    parsed_base.set_fragment(None);
+    let base_str = parsed_base.to_string();
+
+    let document = Html::parse_document(html);
+    let a_selector = Selector::parse("a[href]")
+        .map_err(|_| "Failed to parse link selector".to_string())?;
+
+    let mut links = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for element in document.select(&a_selector) {
+        if let Some(href) = element.value().attr("href") {
+            let href_trim = href.trim();
+            if href_trim.starts_with('#') || href_trim.starts_with("javascript:") || href_trim.starts_with("mailto:") {
+                continue;
+            }
+            if let Ok(joined) = parsed_base.join(href_trim) {
+                if joined.host() == parsed_base.host()
+                    && (joined.scheme() == "http" || joined.scheme() == "https")
+                {
+                    let mut clean_url = joined;
+                    clean_url.set_fragment(None);
+                    let link_str = clean_url.to_string();
+                    if link_str != base_str && seen.insert(link_str.clone()) {
+                        links.push(link_str);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(links)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +297,26 @@ mod tests {
         assert_eq!(ir.title, "Untitled Page");
         assert!(ir.markdown_ir.contains("No title tag here"));
     }
+
+    #[test]
+    fn test_extract_links() {
+        let html = r##"
+            <a href="/pricing">Pricing</a>
+            <a href="https://example.com/features">Features</a>
+            <a href="https://external.org">External</a>
+            <a href="javascript:void(0)">JS</a>
+            <a href="#section">Section</a>
+        "##;
+        let links = extract_links("https://example.com/home", html).unwrap();
+        assert_eq!(
+            links,
+            vec![
+                "https://example.com/pricing".to_string(),
+                "https://example.com/features".to_string(),
+            ]
+        );
+    }
 }
+
 
 

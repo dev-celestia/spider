@@ -2,7 +2,7 @@
 //! 
 //! A high-performance Rust web browsing library and AI Intermediate Representation (IR) generator.
 //! Built around a streaming builder architecture (`Browser::builder()`) with support for static HTTP fetching,
-//! dynamic JavaScript rendering, and anti-bot stealth mode via Headless Chrome.
+//! dynamic JavaScript rendering, anti-bot stealth mode via Headless Chrome, and one-off single page crawling utilities (`crawl_single_page`).
 //! 
 //! ## Interleaved Queue-Based Streaming Architecture
 //! 
@@ -36,6 +36,24 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## Single Page Crawl Utility Example
+//!
+//! ```rust,no_run
+//! use browser_crawler::{crawl_single_page, RenderOptions, RenderMode};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), String> {
+//!     let options = RenderOptions {
+//!         render_mode: RenderMode::Static,
+//!         ..Default::default()
+//!     };
+//!     let page_ir = crawl_single_page("https://example.com", &options).await?;
+//!     println!("Title: {}", page_ir.title);
+//!     println!("Markdown IR:\n{}", page_ir.markdown_ir);
+//!     Ok(())
+//! }
+//! ```
 
 pub mod builder;
 pub mod exporter;
@@ -50,9 +68,9 @@ pub use builder::{Browser, BrowserBuilder};
 pub use exporter::{FileStorageExporter, FileStorageExporterBuilder};
 pub use mapper::{SiteMapper, SiteMapperBuilder};
 pub use pipeline::{BrowserPipeline, BrowserPipelineBuilder, CrawlerPipeline};
-pub use renderer::PageFetcher;
+pub use renderer::{crawl_single_page, PageFetcher};
 pub use stealth::{stealth_chrome_args, STEALTH_JS};
-pub use transformer::transform_html_to_ir;
+pub use transformer::{extract_links, transform_html_to_ir};
 pub use types::{
     AnalysisCallback, CrawlSummary, PageIR, RenderMode, RenderOptions, SitemapNode,
     StorageExporter, TimeoutStrategy, WaitUntil,
