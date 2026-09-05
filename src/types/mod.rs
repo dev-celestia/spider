@@ -1,3 +1,16 @@
+pub mod options;
+pub mod result;
+
+pub use options::{
+    parse_custom_headers, parse_headless_optional_arguments, KnownFiles, OnResultCallback,
+    OnSkipURLCallback, Options, PageLoadStrategy, SimilarityMode, Strategy,
+};
+// NOTE: `result::Result` is intentionally not glob-re-exported into this
+// module's scope — the legacy code below uses `std::result::Result`.
+// Access the crawl result as `crate::types::result::Result` (re-exported at
+// the crate root as `CrawlResult`).
+pub use result::{now_rfc3339, Form, Headers, Request, Response};
+
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;

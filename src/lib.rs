@@ -56,22 +56,30 @@
 //! ```
 
 pub mod builder;
+pub mod engine;
 pub mod exporter;
 pub mod mapper;
+pub mod output;
 pub mod pipeline;
 pub mod renderer;
+pub mod runner;
 pub mod stealth;
 pub mod transformer;
 pub mod types;
+pub mod utils;
 
 pub use builder::{Browser, BrowserBuilder};
+pub use engine::common::{Crawler, PageFetch};
 pub use exporter::{FileStorageExporter, FileStorageExporterBuilder};
 pub use mapper::{SiteMapper, SiteMapperBuilder};
+pub use output::{configure_output, StandardWriter};
 pub use pipeline::{BrowserPipeline, BrowserPipelineBuilder, CrawlerPipeline};
 pub use renderer::{crawl_single_page, PageFetcher};
+pub use runner::{Runner, RunnerSummary};
 pub use stealth::{stealth_chrome_args, STEALTH_JS};
 pub use transformer::{extract_links, transform_html_to_ir};
+pub use types::result::Result as CrawlResult;
 pub use types::{
-    AnalysisCallback, CrawlSummary, PageIR, RenderMode, RenderOptions, SitemapNode,
-    StorageExporter, TimeoutStrategy, WaitUntil,
+    AnalysisCallback, CrawlSummary, Options, PageIR, RenderMode, RenderOptions, Request, Response,
+    SitemapNode, Strategy, StorageExporter, TimeoutStrategy, WaitUntil,
 };

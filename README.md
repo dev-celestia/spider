@@ -1,264 +1,204 @@
-# Browser & AI IR Library
+# celestia-browser
 
 [![Rust](https://img.shields.io/badge/rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A high-performance Rust web browsing library and AI Intermediate Representation (IR) generator. Built around a streaming builder architecture (`Browser::builder()`) with support for static HTTP fetching, dynamic JavaScript rendering, and anti-bot stealth mode via Headless Chrome.
+A fast, full-featured web crawler in Rust with a CLI binary and a library crate
+(`browser-crawler`). It ships a 1:1 port of the reference Go crawler (vendored
+under [`reference/`](reference/)) — standard, headless, and hybrid crawl engines,
+scope & filter pipelines, rate limiting, JavaScript crawling, form filling, and
+JSONL/template output — plus a token-optimized AI Intermediate Representation
+(IR) generator built on the same engine.
 
 ---
 
-## 📐 Queue-Based Navigation & Rendering Pipeline
+## ✨ Feature Highlights
 
-```
-┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│ QUEUE-BASED INTERLEAVED CRAWL LOOP                                                        │
-│                                                                                          │
-│ ┌──────────────────────────────────────────────────────────────────────────────────────┐ │
-│ │ 1. Push Landing Page Task (start_url, depth=0) into Navigation Queue                  │ │
-│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
-│                                            │                                             │
-│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
-│ │ 2. WHILE Queue is NOT Empty: POP Next CrawlTask (url, depth)                         │ │
-│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
-│                                            │                                             │
-│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
-│ │ 3. Fetch HTML (Static / Dynamic Headless Chrome with Stealth)                          │ │
-│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
-│                                            │                                             │
-│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
-│ │ 4. Extract PageIR (Title, Noise Pruning, Markdown IR, Thumbnails, Links)               │ │
-│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
-│                                            │                                             │
-│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
-│ │ 5. Execute Content Analysis Callback (.on_page / LLM Prompting)                        │ │
-│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
-│                                            │                                             │
-│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
-│ │ 6. Export Payload to Disk (./out / Vector DB)                                          │ │
-│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
-│                                            │                                             │
-│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
-│ │ 7. Scan HTML for Same-Domain Links (<a href="...">)                                   │ │
-│ │    For each unvisited link (if depth < max_depth):                                     │ │
-│ │    ├──> Mark Visited                                                                   │ │
-│ │    └──> PUSH (link, depth + 1) onto Navigation Queue                                   │ │
-│ └──────────────────────────────────────────┬───────────────────────────────────────────┘ │
-│                                            │                                             │
-│ ┌──────────────────────────────────────────▼───────────────────────────────────────────┐ │
-│ │ 8. Repeat POP from Queue until Queue is Empty & Crawl Summary is Returned              │ │
-│ └──────────────────────────────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────────────────────────────┘
-```
+### Crawler engines
 
----
+| Engine | Flag | Description |
+|--------|------|-------------|
+| Standard | *(default)* | Plain HTTP fetching via `reqwest` — fastest path for static sites. |
+| Headless | `--headless` | Every page renders in headless Chrome: live DOM, JS execution, anti-bot stealth, XHR capture. |
+| Hybrid | `--hybrid` | Pages render headlessly; static resources (`.js`, `.css`, …) fetch over plain HTTP. |
 
----
+### Crawl control
 
-## 🌟 Key Features
+- **Depth & duration limits** (`--depth`, `--crawl-duration`), depth-first or
+  breadth-first queue strategies (`--strategy`).
+- **Scope pipeline** — host-based scope (`dn`/`rdn`/`fqdn`/custom regex via the
+  Public Suffix List), in/out-of-scope URL regexes (`--crawl-scope`,
+  `--crawl-out-scope`).
+- **Filters** — match/filter regexes, extension allow/deny lists, DSL
+  match/filter conditions (`--match-condition "status_code == 200"`), exact
+  content dedup, SimHash near-duplicate page filtering, similar-URL path-trie
+  filtering, page-type heuristics (error/captcha/parked).
+- **Rate limiting** — global and per-host token buckets, per-second and
+  per-minute, plus fixed request delay.
+- **Concurrency** — parallel fetcher workers (`--concurrency`) and parallel
+  input processing (`--parallelism`).
+- **Known files** — `robots.txt` / `sitemap.xml` crawling (`--known-files all`).
+- **JavaScript crawling** — endpoint extraction from discovered JS/CSS files
+  (`--js-crawl`, `--jsluice`).
+- **Forms** — automatic form detection, filling, and submission
+  (`--automatic-form-fill`), form metadata extraction (`--form-extraction`),
+  YAML-configurable fill values (`--form-config`).
+- **Auth & CAPTCHA** — automatic login (`--auto-login user:pass`) and a native
+  capsolver client for reCAPTCHA/hCaptcha/Turnstile.
+- **Tech detection & knowledge base** — response fingerprinting
+  (`--tech-detect`) and secrets/endpoints classification (`--knowledge-base`).
+- **Resume** — pending-queue state saved on interrupt, resumable via `--resume`.
 
-- **Streaming Queue Navigation**: Discovered links are pushed onto a navigation queue during page scanning, and popped one by one for real-time processing and instant disk export.
-- **Single Page Crawl Utility (`crawl_single_page`)**: One-off fetching and rendering of a single URL without setting up a full multi-page crawler.
-- **Hyperlink Extraction (`extract_links`)**: Scans HTML for valid same-domain absolute links, stripping URL fragments (`#`).
-- **Fluent Builder Pattern (`Browser::builder()`)**: Configure start URL, crawling depth, custom User-Agent, output directories, rendering modes, stealth flags, and callback hooks.
-- **Anti-Bot Stealth Mode (`.stealth(true)`)**: Bypasses bot detection by stripping `--disable-blink-features=AutomationControlled`, masking `navigator.webdriver`, spoofing `window.chrome`, `navigator.plugins`, and WebGL vendor flags.
-- **Dynamic Headless Rendering**: Executes client-side JavaScript, CSS layout evaluations, and SPA hydration (React, Vue, Angular) via Headless Chrome.
-- **Advanced Wait Lifecycles (`WaitUntil`)**: Wait for `NetworkIdle` (0 active requests for 500ms), `DomContentLoaded`, or custom CSS selectors (`WaitUntil::Selector("main")`).
-- **Debug Inspector Mode (`.debug(true)` / `--debug`)**: Logs Chrome CDP rendering steps, network responses, and DOM settlement events, dumping raw HTML to `./out/debug_dump.html`.
-- **Token-Optimized AI IR**: Strips HTML scripts, styles, and wrapper noise into clean, compact Markdown (including article cards, links, and image thumbnails) suitable for LLMs.
-- **Pluggable Storage Exporters**: Built-in file exporter (defaulting to `./out`) and extensible `StorageExporter` trait.
+### Output
+
+- Screen format with verbose `[tag] [method] url [depth:n]` decorations.
+- **JSONL** (`--jsonl`) with field exclusion (`--exclude-output-fields`),
+  raw/body omission (`--omit-raw`, `--omit-body`).
+- **14 field selectors** (`--field url,fqdn,qurl,…`) and per-host field storage
+  (`--store-field`, `--store-field-dir`).
+- Raw request/response storage per host (`--store-response`), custom output
+  templates (`--output-template`), error logging (`--error-log`).
+
+> 📖 **Complete flag-by-flag documentation: [docs/FEATURES.md](docs/FEATURES.md)**
 
 ---
 
-## 📚 Documentation
-
-For complete detailed guides and API specifications, see:
-
-- 📖 [**Full Usage Guide (`docs/USAGE.md`)**](file:///Users/arham/Desktop/project/browser-crawler/docs/USAGE.md)
-- 📑 [**API Reference (`docs/API.md`)**](file:///Users/arham/Desktop/project/browser-crawler/docs/API.md)
-
----
-
-## 📦 Installation
-
-Add `browser-crawler` to your `Cargo.toml`:
-
-```toml
-[dependencies]
-browser-crawler = { path = "." }
-tokio = { version = "1.43", features = ["full"] }
-async-trait = "0.1"
-```
-
----
-
-## 🚀 Quick Start
-
-### 1. Multi-Page Streaming Crawl Example
+## 🚀 CLI Quick Start
 
 ```bash
-cargo run --example example
+# Build
+cargo build --release          # binary: target/release/celestia-browser
+
+# Basic crawl (depth 3, default standard engine)
+celestia-browser -u https://example.com
+
+# JSONL output to file, silent logs
+celestia-browser -u https://example.com -d 3 -j -silent -o results.jsonl
+
+# Headless crawl with stealth + XHR extraction
+celestia-browser -u https://spa.example.com --headless -j --xhr-extraction
+
+# Scope, filters, and rate limiting
+celestia-browser -u https://example.com -cs "/(api|docs)/" -fr "logout" -rl 50
+
+# Known files + JS endpoint scraping
+celestia-browser -u https://example.com --known-files all --js-crawl
+
+# Crawl from a URL list (or stdin)
+cat urls.txt | celestia-browser -d 2 -silent
 ```
 
-#### Code Overview (`examples/example.rs`)
+Flag syntax: long names use `--` (`--js-crawl`); unambiguous single-char shorts
+work too (`-u`, `-d`, `-o`, `-j`, `-v`, `-c`, `-p`, `-s`). Run
+`celestia-browser --help` for the full list.
+
+---
+
+## 📚 Library Quick Start
+
+### Crawler engine API (`Runner`)
+
+```rust
+use browser_crawler::{Options, Runner, StandardWriter};
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), String> {
+    let mut options = Options::with_defaults();
+    options.urls = vec!["https://example.com".into()];
+    options.max_depth = 2;
+    options.rate_limit = 50;
+    options.tech_detect = true;
+
+    let writer = Arc::new(StandardWriter::from_options(&options));
+    let mut runner = Runner::new(options)?;   // validates options
+    let summary = runner.run().await?;        // full crawl with summary stats
+    println!("results: {}, failed: {}", summary.results, summary.failed);
+    Ok(())
+}
+```
+
+Every option is programmatically available on
+[`Options`](src/types/options.rs); callbacks `options.on_result` /
+`options.on_skip_url` receive each emitted/skipped URL.
+
+### AI IR library API (`Browser::builder()`)
+
+The original streaming IR pipeline still runs on the shared engine — static or
+headless rendering, Markdown IR generation, per-page analysis callbacks, and
+pluggable storage exporters:
 
 ```rust
 use std::time::Duration;
-use browser_crawler::{Browser, RenderMode, TimeoutStrategy, WaitUntil};
+use browser_crawler::{Browser, RenderMode, WaitUntil};
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let browser = Browser::builder()
-        .start_url("https://0xbuffer.com/")
-        .max_depth(1)
+        .start_url("https://example.com")
+        .max_depth(2)
         .render_mode(RenderMode::Dynamic)
         .stealth(true)
-        .wait_until(WaitUntil::Delay(Duration::from_secs(3)))
-        .render_timeout(Duration::from_secs(12))
-        .timeout_strategy(TimeoutStrategy::ExtractPartial)
+        .wait_until(WaitUntil::NetworkIdle)
+        .render_timeout(Duration::from_secs(10))
         .on_page(|page_ir| async move {
-            println!("[Process] Processed URL: {}", page_ir.url);
             println!("Title: {}", page_ir.title);
             Ok(())
         })
         .build()?;
 
-    // Execute the streaming browser pipeline
     let summary = browser.run().await?;
-    println!("Pages Processed: {}", summary.pages_processed);
-    println!("Total IR Bytes: {}", summary.total_ir_bytes);
-    println!("Visited URLs: {:?}", summary.visited_urls);
+    println!("Pages processed: {}", summary.pages_processed);
     Ok(())
 }
 ```
 
-### 2. Single Page Crawl & Link Extraction Utility
+One-off utilities: `crawl_single_page(url, &options)`, `browser.fetch_page(url)`,
+and `extract_links(base_url, html)`.
 
-```bash
-cargo run --example single_page
+---
+
+## 🏗️ Architecture
+
 ```
-
-#### Code Overview (`examples/single_page.rs`)
-
-```rust
-use browser_crawler::{crawl_single_page, extract_links, Browser, RenderMode, RenderOptions};
-
-#[tokio::main]
-async fn main() -> Result<(), String> {
-    // 1. One-off single page fetch
-    let options = RenderOptions {
-        render_mode: RenderMode::Static,
-        ..Default::default()
-    };
-    let page_ir = crawl_single_page("https://example.com", &options).await?;
-    println!("Title: {}", page_ir.title);
-
-    // 2. Extract same-domain links
-    let html = r#"<a href="/about">About</a><a href="https://example.com/docs">Docs</a>"#;
-    let links = extract_links("https://example.com", html)?;
-    println!("Extracted links: {:?}", links);
-
-    // 3. Fetch single page using Browser instance
-    let browser = Browser::builder().start_url("https://example.com").build()?;
-    let fetched = browser.fetch_page("https://example.com/about").await?;
-    println!("Fetched: {}", fetched.title);
-
-    Ok(())
-}
+┌────────────────────────────────────────────────────────────────────┐
+│                         celestia-browser                            │
+├──────────────────┬──────────────────┬──────────────────────────────┤
+│  standard engine │  headless engine │       hybrid engine          │
+│  (reqwest HTTP)  │  (Chrome CDP +   │  (browser pages + HTTP       │
+│                  │   stealth, XHR,  │   sub-resources)             │
+│                  │   forms, captcha)│                              │
+├──────────────────┴──────────────────┴──────────────────────────────┤
+│                     engine::common (shared core)                    │
+│   worker pool · queue (DFS/BFS) · scope manager · filter pipeline   │
+│   rate limiting · retries · dedup (URL/content/simhash/path-trie)   │
+├─────────────────────────────────────────────────────────────────────┤
+│  parser (30+ tag/attr + header parsers, JS endpoints, forms)        │
+├─────────────────────────────────────────────────────────────────────┤
+│  output (screen / JSONL / template / fields / store-response)       │
+├─────────────────────────────────────────────────────────────────────┤
+│  utils (scope, DSL, simhash, path-trie, formfill, knownfiles, tech) │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🛠️ Public Utility Functions
+## 📖 Documentation
 
-### `crawl_single_page`
+| Document | Contents |
+|----------|----------|
+| [docs/FEATURES.md](docs/FEATURES.md) | **Complete end-user feature reference** — every flag, engine, filter, output format, and field selector |
+| [docs/USAGE.md](docs/USAGE.md) | Legacy IR-library usage guide and quickstart |
+| [docs/API.md](docs/API.md) | Legacy `Browser::builder()` IR-library API reference (crawler API: [`src/types/options.rs`](src/types/options.rs), [`src/runner.rs`](src/runner.rs)) |
 
-```rust
-pub async fn crawl_single_page(url: &str, options: &RenderOptions) -> Result<PageIR, String>
-```
-
-Asynchronously fetches a single page without setting up a multi-page crawler. Supports both static HTTP and dynamic Headless Chrome rendering.
-
-### `extract_links`
-
-```rust
-pub fn extract_links(base_url: &str, html: &str) -> Result<Vec<String>, String>
-```
-
-Parses HTML and extracts all valid same-domain absolute hyperlinks, stripping URL fragments (`#`).
-
-### `Browser::fetch_page`
-
-```rust
-pub async fn fetch_page(&self, url: &str) -> Result<PageIR, String>
-```
-
-Fetches a single page using a pre-configured `Browser` instance.
-
----
-
-## 🔍 How to Use Debug Mode
-
-Debug Mode logs Headless Chrome execution steps, CDP network status responses, and DOM settlement events. It also writes a raw DOM snapshot to `./out/debug_dump.html` for offline DOM inspection.
-
-### Method 1: Via Terminal CLI Flag (`--debug`)
-
-Pass `--debug` when running the example:
+## 🧪 Examples & Tests
 
 ```bash
-cargo run --example example -- --debug
+cargo run --example example       # multi-page streaming IR crawl
+cargo run --example single_page   # one-off page fetch + link extraction
+cargo test                        # 137 unit/doc tests
 ```
-
----
-
-## 📊 Summary Metrics (`CrawlSummary`)
-
-When `browser.run().await` completes, it returns a `CrawlSummary` struct:
-
-```rust
-pub struct CrawlSummary {
-    pub pages_processed: usize,
-    pub total_ir_bytes: usize,
-    pub visited_urls: Vec<String>,
-}
-```
-
----
-
-## 🧪 Running Example Commands
-
-### Default Dynamic Render Run (`https://0xbuffer.com/`)
-```bash
-cargo run --example example
-```
-
-### Single Page Utility Run
-```bash
-cargo run --example single_page
-```
-
-### Debug Inspection Mode
-```bash
-cargo run --example example -- --debug
-```
-
-### Fast Static HTTP Fetch Mode
-```bash
-cargo run --example example -- --static
-```
-
-### Target Custom URL
-```bash
-cargo run --example example -- https://example.com --debug
-```
-
-### Run Unit & Doc Tests
-```bash
-cargo test
-```
-
----
 
 ## 📄 License
 
 This project is licensed under the MIT License.
-
