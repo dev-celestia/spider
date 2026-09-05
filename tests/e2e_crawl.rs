@@ -16,7 +16,7 @@ use common::{crawl_options, spawn, standard_site};
 /// Run a crawl with `options` against `server`, collecting emitted result URLs.
 async fn crawl_and_collect(
     options: &Options,
-) -> (Arc<Crawler>, Arc<Mutex<Vec<String>>>, Vec<serde_json::Value>) {
+) -> (Arc<Crawler>, Arc<Mutex<Vec<String>>>) {
     let writer = Arc::new(StandardWriter::from_options(options));
     let cancel = Arc::new(AtomicBool::new(false));
     let results: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -29,24 +29,14 @@ async fn crawl_and_collect(
     let crawler = Arc::new(Crawler::new(Arc::new(options), fetcher, writer, cancel).unwrap());
     let seed = crawler.options.urls[0].clone();
     crawler.crawl(&seed).await.unwrap();
-    let json = json_results(&crawler);
-    (Arc::clone(&crawler), results, json)
-}
-
-/// Re-run the crawl capturing JSONL output into a temp file and parse it.
-fn json_results(crawler: &Arc<Crawler>) -> Vec<serde_json::Value> {
-    // JSON output is exercised separately; here we synthesize from results via
-    // the writer is not retained — tests that need JSON use the CLI suite.
-    // This helper parses nothing; it exists so tests can share one call shape.
-    let _ = crawler;
-    Vec::new()
+    (Arc::clone(&crawler), results)
 }
 
 #[tokio::test]
 async fn e2e_full_site_crawl_visits_all_pages() {
     let server = spawn(standard_site(None)).await;
     let options = crawl_options(&server.base_url);
-    let (crawler, results, _) = crawl_and_collect(&options).await;
+    let (crawler, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(urls.iter().any(|u| u.ends_with("/")), "index visited: {urls:?}");
@@ -65,7 +55,7 @@ async fn e2e_depth_limit_stops_recursion() {
     let server = spawn(routes).await;
     let mut options = crawl_options(&server.base_url);
     options.max_depth = 1; // index (0) + /about (1); /contact would be depth 2
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(urls.iter().any(|u| u.ends_with("/about")));
@@ -78,7 +68,7 @@ async fn e2e_default_extension_filter_skips_images() {
     let server = spawn(standard_site(None)).await;
     let mut options = crawl_options(&server.base_url);
     options.max_depth = 1;
-    let (crawler, _, _) = crawl_and_collect(&options).await;
+    let (crawler, _) = crawl_and_collect(&options).await;
 
     assert_eq!(server.hits("/logo.png"), 0, "png filtered by default denylist");
     assert_eq!(server.hits("/about"), 1);
@@ -92,7 +82,7 @@ async fn e2e_crawl_scope_regex_restricts_following() {
     let server = spawn(standard_site(None)).await;
     let mut options = crawl_options(&server.base_url);
     options.scope = vec!["/about".to_string()];
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(urls.iter().any(|u| u.ends_with("/about")));
@@ -106,7 +96,7 @@ async fn e2e_out_of_scope_regex_excludes() {
     let server = spawn(standard_site(None)).await;
     let mut options = crawl_options(&server.base_url);
     options.out_of_scope = vec!["/users/".to_string()];
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(urls.iter().any(|u| u.ends_with("/about")));
@@ -119,7 +109,7 @@ async fn e2e_match_and_filter_regex_on_output() {
     let server = spawn(standard_site(None)).await;
     let mut options = crawl_options(&server.base_url);
     options.match_regex = vec![regex::Regex::new("/(about|contact)").unwrap()];
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(!urls.is_empty(), "matched pages emitted");
@@ -190,7 +180,7 @@ async fn e2e_known_files_crawl_robots_and_sitemap() {
     let server = spawn(standard_site(None)).await;
     let mut options = crawl_options(&server.base_url);
     options.known_files = browser_crawler::types::options::KnownFiles::All;
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(urls.iter().any(|u| u.ends_with("/private")), "robots.txt disallow crawled: {urls:?}");
@@ -204,7 +194,7 @@ async fn e2e_js_crawl_extracts_js_endpoints() {
     let mut options = crawl_options(&server.base_url);
     options.scrape_js_responses = true;
     options.max_depth = 2;
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(
@@ -219,7 +209,7 @@ async fn e2e_no_js_crawl_skips_endpoints() {
     let server = spawn(standard_site(None)).await;
     let mut options = crawl_options(&server.base_url);
     options.max_depth = 2;
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(!urls.iter().any(|u| u.contains("/api/secret/")), "endpoints not scraped without -jc");
@@ -265,7 +255,7 @@ async fn e2e_automatic_form_fill_submits_form() {
     let mut options = crawl_options(&server.base_url);
     options.automatic_form_fill = true;
     options.max_depth = 2;
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     // The filled form navigation is enqueued as /submit?q=<placeholder>.
     let all = server.all_requests();
@@ -283,7 +273,7 @@ async fn e2e_dsl_match_condition_filters_output() {
     let server = spawn(standard_site(None)).await;
     let mut options = crawl_options(&server.base_url);
     options.output_match_condition = "contains(url, '/about')".to_string();
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(!urls.is_empty());
@@ -300,7 +290,7 @@ async fn e2e_page_type_filter_drops_errors() {
     // /missing returns 404; request it directly as seed link via about? Use a
     // dedicated seed on a 404 path: the seed itself is filtered on response.
     options.urls = vec![format!("{}/missing", server.base_url)];
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(urls.is_empty(), "404 seed filtered by page-type: {urls:?}");
@@ -366,7 +356,7 @@ async fn e2e_max_domain_pages_caps_crawl() {
     let server = spawn(standard_site(None)).await;
     let mut options = crawl_options(&server.base_url);
     options.max_domain_pages = 2;
-    let (crawler, results, _) = crawl_and_collect(&options).await;
+    let (crawler, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(
@@ -389,7 +379,7 @@ async fn e2e_path_climb_enqueues_ancestors() {
     options.path_climb = true;
     options.max_depth = 3;
     options.urls = vec![format!("{}/a/b/c", server.base_url)];
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(urls.iter().any(|u| u.ends_with("/a/")), "ancestor /a/ climbed: {urls:?}");
@@ -419,7 +409,7 @@ async fn e2e_strategy_breadth_first_visits_level_order() {
     let mut options = crawl_options(&server.base_url);
     options.strategy = browser_crawler::types::options::Strategy::BreadthFirst;
     options.max_depth = 1;
-    let (crawler, _, _) = crawl_and_collect(&options).await;
+    let (crawler, _) = crawl_and_collect(&options).await;
 
     // All depth-1 pages were discovered; breadth-first order is exercised by
     // the queue unit tests — here assert completion and no failures.
@@ -502,7 +492,7 @@ async fn e2e_scope_cross_host_external_skipped() {
     let main = spawn(standard_site(Some(&format!("{}/", external_url)))).await;
 
     let mut options = crawl_options(&main.base_url);
-    let (_, results, _) = crawl_and_collect(&options).await;
+    let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
     assert!(
@@ -522,7 +512,7 @@ async fn e2e_retry_on_failed_fetch() {
     options.retries = 1;
     options.timeout = 5;
     let start = std::time::Instant::now();
-    let (crawler, _, _) = crawl_and_collect(&options).await;
+    let (crawler, _) = crawl_and_collect(&options).await;
 
     assert_eq!(crawler.stats.failed.load(std::sync::atomic::Ordering::SeqCst), 1);
     // Retry backoff (250ms) plus connection attempts must have elapsed.

@@ -229,7 +229,7 @@ fn cli_store_response_creates_raw_dumps() {
         }
         for f in std::fs::read_dir(&path).unwrap().flatten() {
             let content = std::fs::read_to_string(f.path()).unwrap();
-            if content.contains("HTTP/1.1 200 OK") {
+            if content.contains("HTTP/1.1 200") && content.contains("/about") {
                 found_raw = true;
             }
         }
@@ -241,7 +241,11 @@ fn cli_store_response_creates_raw_dumps() {
 
 #[test]
 fn cli_health_check_runs() {
-    let (code, stdout, _) = run(&["--health-check"], None);
+    // Health check requires valid options too (needs a URL + depth).
+    let (code, stdout, _) = run(
+        &["--health-check", "-u", "https://127.0.0.1:1", "-d", "1"],
+        None,
+    );
     assert_eq!(code, 0);
     assert!(stdout.contains("Health Check"), "{stdout}");
     assert!(stdout.contains("dns resolution"));
