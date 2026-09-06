@@ -1,4 +1,4 @@
-The crate exposes three levels of API, all on the same engine.
+The crate exposes four levels of API, all on the same engine.
 
 ## `Runner` — the crawler engine
 
@@ -56,6 +56,28 @@ let summary = browser.run().await?;
 
 One-off utilities: `crawl_single_page(url, &options)` and `browser.fetch_page(url)` return a single `PageIR`; `extract_links(base_url, html)` resolves a page's links without fetching.
 
+## `SiteMapper` — sitemap link trees
+
+A focused depth-first mapper for rapid link discovery (CLI: `--sitemap-tree`). Instead of running the crawl pipeline, it fetches each page, collects same-host links, and recurses — producing a nested `SitemapNode` tree where each node is `{ url, depth, children }`. A link reachable from multiple parents appears once, under the first DFS path that reaches it.
+
+```rust
+use browser_crawler::{RenderOptions, SiteMapper};
+
+let mapper = SiteMapper::builder()
+    .max_depth(3)
+    .max_pages(500)          // 0 = unlimited; stops DFS once the cap is hit
+    .user_agent("MyAgent/1.0")
+    .render_options(RenderOptions::default()) // RenderMode::Dynamic for headless
+    .build();
+
+if let Some(root) = mapper.map_site("https://example.com").await {
+    println!("{}", serde_json::to_string_pretty(&root)?);
+}
+println!("fetched {} pages", mapper.pages_fetched());
+```
+
+`SiteMapper::new(max_depth)` is a shorthand for `builder().max_depth(n).build()`. For a flat, concurrent scan of the same site, use the crawl engine's `depth-first`/`breadth-first` strategies instead.
+
 ## `CrawlSession` — UI / GUI integration
 
 The embedding surface for Tauri, Electron, egui, or any UI host: spawn a crawl from a serde-serializable `CrawlConfig`, receive a typed event stream, and control it from UI buttons.
@@ -83,13 +105,12 @@ tokio::spawn(async move {
 let summary = session.join().await?;
 ```
 
-Full recipes (Tauri commands + JS listener, Electron sidecar, native UIs) live in `docs/UI_INTEGRATION.md`.
-
 ## Where the deep reference lives
 
-| Document | Contents |
-|----------|----------|
-| `docs/FEATURES.md` | Every CLI flag, engine, filter, and output format |
-| `docs/USAGE.md` | IR-library usage guide and quickstart |
-| `docs/API.md` | Legacy `Browser::builder()` API reference |
+| Source | Contents |
+|--------|----------|
 | `src/types/options.rs` | The `Options` struct — the programmatic flag surface |
+| `src/mapper.rs` | `SiteMapper` / `SiteMapperBuilder` — sitemap tree generation |
+| `src/session.rs` | `CrawlConfig`, `CrawlSession`, `CrawlerEvent` — embedding surface |
+| `src/builder.rs` | `Browser::builder()` — the IR pipeline facade |
+| In-app **Docs** view | End-user reference: flags, engines, filters, output |

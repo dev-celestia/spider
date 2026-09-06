@@ -39,9 +39,11 @@ Supported challenge types: reCAPTCHA, hCaptcha, Turnstile. Detection pairs with 
 |------|-------------|
 | `--tech-detect` | Fingerprint technologies from headers/body (WordPress, Next.js, Nginx, Cloudflare, …) → `technologies` in JSONL. |
 | `--knowledge-base` | Classify discovered endpoints and secrets into a knowledge base. |
-| `--secrets` | Scan response bodies for secret patterns (keys, tokens). |
-| `--validate-secrets` | Attempt low-risk validation of found secrets. |
-| `--endpoints` | Emit discovered API endpoints in JSONL output. |
+| `--kb-secrets` | Scan response bodies for secret patterns (keys, tokens). |
+| `--kb-validate-secrets` | Validate detected secrets against their provider (sends live API calls). |
+| `--kb-endpoints` | Extract and classify API endpoints (REST/GraphQL/SOAP/XHR) into the knowledge base. |
+
+The knowledge-base switches compose: `--knowledge-base` enables classification plus the secrets and endpoints extractors; `--kb-validate-secrets` stays opt-in.
 
 ## Known files
 

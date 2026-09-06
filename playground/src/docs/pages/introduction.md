@@ -22,6 +22,7 @@ Both are built on one shared core: a 4-phase interleaved queue that fetches page
 - **Auth & CAPTCHA** — `--auto-login user:pass` and a native capsolver client for reCAPTCHA/hCaptcha/Turnstile.
 - **Output** — decorated screen output, JSONL, custom templates, 14 field selectors, per-host raw response storage.
 - **Resume** — pending-queue state saved on Ctrl-C, resumable with the same flag.
+- **Sitemap mapping** — `--sitemap-tree` swaps the crawl engine for the depth-first `SiteMapper` and emits the site as a nested `SitemapNode` JSON tree instead of per-page results.
 
 ## AI Intermediate Representation
 
@@ -35,9 +36,8 @@ Every fetched page is transformed into a `PageIR`: noise-pruned, cleaned text re
 | `src/engine/` | Standard/headless/hybrid engines + shared queue core |
 | `src/types/options.rs` | The full `Options` surface (every flag is a field) |
 | `src/transformer.rs` | HTML → `PageIR` markdown IR generation |
+| `src/mapper.rs` | `SiteMapper` — depth-first sitemap link-tree generation |
 | `src/session.rs` | `CrawlSession` — UI integration surface |
 | `src/wasm.rs` | WASM bindings (browser core) |
-| `docs/FEATURES.md` | Complete flag-by-flag end-user reference |
-| `docs/USAGE.md` | IR-library usage guide |
-| `docs/API.md` | Legacy `Browser::builder()` API reference |
-| `docs/UI_INTEGRATION.md` | Tauri / Electron / egui embedding recipes |
+
+The complete end-user reference ships inside this app's **Docs** view — the pages live as markdown under `playground/src/docs/pages/` and are bundled into the build.

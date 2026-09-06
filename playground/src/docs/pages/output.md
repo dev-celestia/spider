@@ -42,4 +42,4 @@ Default format is one URL per line; `-v`/`--verbose` decorates results as `[tag]
 
 ## AI IR exporters (library)
 
-The `Browser::builder()` pipeline exports each `PageIR` through pluggable storage exporters — JSON files, markdown, or any custom `StorageExporter` — with per-page `on_page` callbacks for analysis, LLM prompting, or custom sinks. See `docs/USAGE.md` for recipes.
+The `Browser::builder()` pipeline exports each `PageIR` through pluggable storage exporters — JSON files, markdown, or any custom `StorageExporter` — with per-page `on_page` callbacks for analysis, LLM prompting, or custom sinks. See the **Library API** page for the builder in action.

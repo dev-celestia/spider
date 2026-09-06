@@ -5,6 +5,7 @@
 | `--list` / `-u` | Target URL(s). Repeatable; accepts a file path (one URL per line). |
 | stdin | Pipe URLs directly: `cat urls.txt | celestia-browser -d 2`. |
 | `--exclude` | Exclude hosts matching a filter (`cdn`, `private-ips`, CIDR, ip, regex). |
+| `--resolvers` / `-r` | Custom DNS resolvers (file or comma-separated) used for name resolution. |
 
 ## Core configuration
 
@@ -21,8 +22,11 @@
 | `--proxy` | — | HTTP/SOCKS5 proxy URL. |
 | `--headers` / `-H` | — | Custom headers (`Key: Value`); repeatable or a file path. Sent on every request. |
 | `--ignore-query-params` | off | Treat `/page?a=1` and `/page?a=2` as the same URL. |
+| `--max-onclick-links` | `10` | Maximum number of `onclick` links processed per page. |
+| `--tls-impersonate` | off | Experimental client-hello (JA3) randomization to blend in with browser TLS fingerprints. |
 | `--max-domain-pages` | `0` | Cap pages crawled per domain (0 = unlimited). |
 | `--path-climb` | off | Also crawl parent paths of discovered URLs (`/a/b/c` → `/a/`, `/a/b/`). |
+| `--sitemap-tree` | off | Skip the crawl engine: build a depth-first sitemap link tree with `SiteMapper` and print it as `SitemapNode` JSON (honors `-d`, `--headless`, `-o`, `-silent`). |
 | `--config` | — | Celestia configuration file (accepted for compatibility). |
 
 ## The crawl loop

@@ -60,7 +60,6 @@
 //! For UI hosts, [`CrawlSession`] is the integration surface: a serde-serializable
 //! [`CrawlConfig`], a broadcast [`CrawlerEvent`] stream, and a
 //! [`crate::CrawlSessionHandle`] with `cancel` / `pause` / `resume` / `join`.
-//! See `docs/UI_INTEGRATION.md` for full recipes.
 //!
 //! ```rust,no_run
 //! use browser_crawler::{CrawlConfig, CrawlSession, CrawlerEvent};

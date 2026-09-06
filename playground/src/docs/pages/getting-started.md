@@ -11,7 +11,7 @@ Requires a Rust toolchain (2024 edition). Nothing else is needed for the standar
 
 ```toml
 [dependencies]
-browser-crawler = "0.1"   # check the workspace version
+browser-crawler = "0.2"   # check the workspace version
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -35,6 +35,9 @@ celestia-browser -u https://example.com --known-files all --js-crawl
 
 # Crawl from a URL list (or stdin)
 cat urls.txt | celestia-browser -d 2 -silent
+
+# Sitemap tree: DFS link tree as JSON instead of per-page results
+celestia-browser -u https://example.com -d 3 --sitemap-tree -o sitemap.json
 ```
 
 Run `celestia-browser --help` for the full list. Flag syntax: long names use `--` (`--js-crawl`); unambiguous single-char shorts work too (`-u`, `-d`, `-o`, `-j`, `-v`, `-c`, `-p`, `-s`). Multi-character celestia shorts like `-jc` are **long-only** here (`--js-crawl`), since the Rust CLI parser does not support multi-character short flags.
@@ -88,12 +91,10 @@ async fn main() -> Result<(), String> {
 }
 ```
 
-## Tests and examples
+## Tests
 
 ```bash
-cargo test                       # unit + doc + end-to-end suite
-cargo run --example example      # multi-page streaming IR crawl
-cargo run --example single_page  # one-off page fetch + link extraction
+cargo test    # unit + doc + end-to-end suite
 ```
 
-The end-to-end suite (`tests/e2e_crawl.rs`, `tests/e2e_cli.rs`) spins up a local HTTP test server and exercises the real engine and CLI binary: depth limits, scope regexes, extension/match/DSL filtering, known-files, JS crawling, form extraction and auto-fill, rate limiting, retries, JSONL output, and more.
+The end-to-end suite (`tests/e2e_crawl.rs`, `tests/e2e_cli.rs`) spins up a local HTTP test server and exercises the real engine and CLI binary: depth limits, scope regexes, extension/match/DSL filtering, known-files, JS crawling, form extraction and auto-fill, rate limiting, retries, JSONL output, and more. `tests/sitemap_tree.rs` covers `SiteMapper` against the same server.
