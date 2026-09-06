@@ -3,9 +3,9 @@
 
 mod common;
 
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+use browser_crawler::control::CrawlControl;
 use browser_crawler::engine::common::{Crawler, PageFetch};
 use browser_crawler::engine::standard::StandardFetcher;
 use browser_crawler::output::StandardWriter;
@@ -18,7 +18,7 @@ async fn crawl_and_collect(
     options: &Options,
 ) -> (Arc<Crawler>, Arc<Mutex<Vec<String>>>) {
     let writer = Arc::new(StandardWriter::from_options(options));
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(CrawlControl::default());
     let results: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let mut options = options.clone();
     let collected = Arc::clone(&results);
@@ -146,8 +146,10 @@ async fn e2e_ignore_query_params_dedupes() {
 
 #[tokio::test]
 async fn e2e_filter_similar_collapses_variable_paths() {
-    // Dedicated site: /site/{1,2,3} share one variable position (threshold 3);
-    // root stays below threshold (2 top-level dirs: /about and /site).
+    // With -fsu the structural fingerprint keys uniqueness (reference crawler
+    // FingerprintURL): /site/{1,2,3} all normalize to /site/{num} via the
+    // layer-1 numeric-segment rule, so only the first is crawled. Non-variable
+    // pages like /about are unaffected.
     let mut routes = standard_site(None);
     routes.insert(
         "/".to_string(),
@@ -170,7 +172,7 @@ async fn e2e_filter_similar_collapses_variable_paths() {
 
     let all = server.all_requests();
     let site_hits = all.iter().filter(|p| p.starts_with("/site/")).count();
-    assert_eq!(site_hits, 3, "site position collapsed after threshold: {all:?}");
+    assert_eq!(site_hits, 1, "numeric site paths collapse to one fingerprint: {all:?}");
     assert!(all.iter().any(|p| p == "/about"), "non-variable page still crawled: {all:?}");
     server.shutdown();
 }
@@ -229,7 +231,7 @@ async fn e2e_form_extraction_attaches_forms_to_jsonl() {
     options.output_file = tmp.to_string_lossy().to_string();
 
     let writer = Arc::new(StandardWriter::from_options(&options));
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(CrawlControl::default());
     let fetcher: Arc<dyn PageFetch> = Arc::new(StandardFetcher::from_options(&options).unwrap());
     let crawler = Arc::new(Crawler::new(Arc::new(options.clone()), fetcher, writer, cancel).unwrap());
     crawler.crawl(&format!("{}/", server.base_url)).await.unwrap();
@@ -308,7 +310,7 @@ async fn e2e_jsonl_file_output_is_well_formed() {
     options.output_file = tmp.to_string_lossy().to_string();
 
     let writer = Arc::new(StandardWriter::from_options(&options));
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(CrawlControl::default());
     let fetcher: Arc<dyn PageFetch> = Arc::new(StandardFetcher::from_options(&options).unwrap());
     let crawler = Arc::new(Crawler::new(Arc::new(options), fetcher, writer, cancel).unwrap());
     crawler.crawl(&format!("{}/", server.base_url)).await.unwrap();
@@ -369,9 +371,14 @@ async fn e2e_max_domain_pages_caps_crawl() {
 
 #[tokio::test]
 async fn e2e_path_climb_enqueues_ancestors() {
-    // /a/b/c page links only to itself; path-climb must discover /a/ and /a/b/.
+    // /a/b/c page links only to itself; path-climb runs per enqueued URL
+    // (reference crawler Enqueue → ExtractParentPaths), so the self-link
+    // must be discovered before /a/ and /a/b/ are climbed.
     let mut routes = standard_site(None);
-    routes.insert("/a/b/c".to_string(), common::Route::html("<html><body>deep</body></html>"));
+    routes.insert(
+        "/a/b/c".to_string(),
+        common::Route::html("<html><body><a href='/a/b/c'>self</a></body></html>"),
+    );
     routes.insert("/a/".to_string(), common::Route::html("<html><body>level a</body></html>"));
     routes.insert("/a/b/".to_string(), common::Route::html("<html><body>level a-b</body></html>"));
     let server = spawn(routes).await;
@@ -439,7 +446,7 @@ async fn e2e_tech_detect_fingerprinted_in_output() {
     let _ = std::fs::remove_file(&tmp);
     options.output_file = tmp.to_string_lossy().to_string();
     let writer = Arc::new(StandardWriter::from_options(&options));
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(CrawlControl::default());
     let fetcher: Arc<dyn PageFetch> = Arc::new(StandardFetcher::from_options(&options).unwrap());
     let crawler = Arc::new(Crawler::new(Arc::new(options), fetcher, writer, cancel).unwrap());
     crawler.crawl(&crawler.options.urls[0].clone()).await.unwrap();
@@ -468,7 +475,7 @@ async fn e2e_knowledge_base_secrets_extracted() {
     let _ = std::fs::remove_file(&tmp);
     options.output_file = tmp.to_string_lossy().to_string();
     let writer = Arc::new(StandardWriter::from_options(&options));
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(CrawlControl::default());
     let fetcher: Arc<dyn PageFetch> = Arc::new(StandardFetcher::from_options(&options).unwrap());
     let crawler = Arc::new(Crawler::new(Arc::new(options), fetcher, writer, cancel).unwrap());
     crawler.crawl(&crawler.options.urls[0].clone()).await.unwrap();
@@ -491,7 +498,7 @@ async fn e2e_scope_cross_host_external_skipped() {
     let external_url = external.base_url.replace("127.0.0.1", "localhost");
     let main = spawn(standard_site(Some(&format!("{}/", external_url)))).await;
 
-    let mut options = crawl_options(&main.base_url);
+    let options = crawl_options(&main.base_url);
     let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();

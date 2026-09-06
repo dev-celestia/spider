@@ -12,6 +12,12 @@ pub struct Item {
     pub body: String,
     pub depth: i32,
     pub priority: i32,
+    /// Seeds skip dequeue-time scope validation (reference crawler
+    /// `navigation.Request.SkipValidation`).
+    pub skip_validation: bool,
+    /// Custom field extraction results carried with the request
+    /// (reference crawler `navigation.Request.CustomFields`).
+    pub custom_fields: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Item {
@@ -23,7 +29,8 @@ impl Item {
 /// A push/pop navigation structure honoring a [`Strategy`].
 ///
 /// - `DepthFirst` pops from the back (LIFO stack)
-/// - `BreadthFirst` pops from the front (FIFO queue)
+/// - `BreadthFirst` pops the shallowest item first (min-heap on depth,
+///   stable for equal depths — reference crawler `queue.priority_queue.go`)
 #[derive(Debug)]
 pub struct Queue {
     strategy: Strategy,
@@ -47,10 +54,17 @@ impl Queue {
         match self.strategy {
             Strategy::BreadthFirst => {
                 if self.data.is_empty() {
-                    None
-                } else {
-                    Some(self.data.remove(0))
+                    return None;
                 }
+                // Min-heap pop: lowest priority (depth) first; ties keep
+                // insertion order (stable min by priority).
+                let mut best = 0;
+                for (i, item) in self.data.iter().enumerate().skip(1) {
+                    if item.priority < self.data[best].priority {
+                        best = i;
+                    }
+                }
+                Some(self.data.remove(best))
             }
             Strategy::DepthFirst => self.data.pop(),
         }
@@ -112,6 +126,8 @@ mod tests {
             body: String::new(),
             depth,
             priority: priority_rank(depth),
+            skip_validation: false,
+            custom_fields: Default::default(),
         }
     }
 
@@ -125,6 +141,17 @@ mod tests {
         assert_eq!(q.pop().unwrap().url, "/b");
         assert_eq!(q.pop().unwrap().url, "/c");
         assert!(q.pop().is_none());
+    }
+
+    #[test]
+    fn test_breadth_first_prefers_shallower() {
+        // Go's BFS is a min-heap on depth: a deeper item pushed first must
+        // not pop before a shallower item discovered later.
+        let mut q = Queue::new(Strategy::BreadthFirst);
+        q.push(item("/deep", 2));
+        q.push(item("/shallow", 1));
+        assert_eq!(q.pop().unwrap().url, "/shallow");
+        assert_eq!(q.pop().unwrap().url, "/deep");
     }
 
     #[test]

@@ -96,6 +96,42 @@ work too (`-u`, `-d`, `-o`, `-j`, `-v`, `-c`, `-p`, `-s`). Run
 
 ## 📚 Library Quick Start
 
+### UI / GUI app integration (`CrawlSession`)
+
+Embedding in Tauri, Electron, egui, or any UI app: spawn a crawl from a
+serde-serializable config, receive a typed event stream, and control it
+(cancel / pause / resume) from your UI:
+
+```rust
+use browser_crawler::{CrawlConfig, CrawlSession, CrawlerEvent};
+
+#[tokio::main]
+async fn main() -> Result<(), String> {
+    let session = CrawlSession::spawn(CrawlConfig {
+        urls: vec!["https://example.com".into()],
+        max_depth: 2,
+        ..Default::default()
+    })?;
+    let mut events = session.take_events().unwrap();
+
+    tokio::spawn(async move {
+        while let Ok(event) = events.recv().await {
+            if let CrawlerEvent::Finished { summary } = event {
+                println!("done: {} pages", summary.results);
+                break;
+            }
+        }
+    });
+
+    // session.pause(); session.resume(); session.cancel();
+    let summary = session.join().await?;
+    Ok(())
+}
+```
+
+Full recipes (Tauri commands + JS listener, Electron sidecar, native UIs) in
+[docs/UI_INTEGRATION.md](docs/UI_INTEGRATION.md).
+
 ### Crawler engine API (`Runner`)
 
 ```rust
@@ -158,6 +194,29 @@ and `extract_links(base_url, html)`.
 
 ---
 
+## 🌐 Web Playground (WASM)
+
+The pure, I/O-free core of the library (HTML → `PageIR` markdown IR, link
+extraction, form parsing, JS endpoint extraction) compiles to WebAssembly and
+runs in the browser via an interactive visual test app in
+[`playground/`](playground/) (Vite + React):
+
+```bash
+cargo install wasm-pack                     # one-time
+rustup target add wasm32-unknown-unknown    # one-time
+pnpm --dir playground build:wasm            # wasm-pack build -> playground/src/wasm
+pnpm --dir playground dev                   # http://localhost:5173
+```
+
+The app lets you fetch a URL (through a dev-only `/api/fetch` proxy that
+sidesteps CORS) or paste HTML, then inspect the generated markdown IR, all
+resolved links with internal/external scope badges, extracted forms, and JS
+endpoints — all processed locally in WebAssembly. The network, headless-Chrome,
+and filesystem engines are compiled out on the `wasm32` target; the native
+build is unaffected.
+
+---
+
 ## 🏗️ Architecture
 
 ```
@@ -196,8 +255,17 @@ and `extract_links(base_url, html)`.
 ```bash
 cargo run --example example       # multi-page streaming IR crawl
 cargo run --example single_page   # one-off page fetch + link extraction
-cargo test                        # 137 unit/doc tests
+cargo test                        # 175 tests: unit + doc + end-to-end
 ```
+
+**End-to-end coverage** (`tests/e2e_crawl.rs`, `tests/e2e_cli.rs`): the suite
+spins up a local HTTP test server and exercises the real crawl engine and the
+`celestia-browser` binary — full-site crawls, depth limits, scope regexes,
+extension/match/DSL filtering, known-files, JS endpoint crawling, form
+extraction & auto-fill, ignore-query-params, similar-URL collapsing, rate
+limiting, crawl-duration stop, retries, tech detection, knowledge-base
+secrets, JSONL output, store-response dumps, stdin input, and CLI
+error handling.
 
 ## 📄 License
 

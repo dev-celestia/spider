@@ -113,6 +113,10 @@ pub struct Response {
     pub forms: Vec<Form>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub xhr_requests: Vec<Request>,
+    /// URLs discovered from onclick handlers during headless rendering
+    /// (reference crawler hybrid onclick click simulation; not serialized).
+    #[serde(skip)]
+    pub onclick_links: Vec<String>,
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub stored_response_path: String,
     #[serde(rename = "knowledgebase", skip_serializing_if = "Option::is_none", default)]

@@ -9,6 +9,7 @@ pub mod responses;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde_json::Value;
@@ -28,21 +29,20 @@ pub enum LogLevel {
 
 /// Process-wide output verbosity (set once from options).
 static LOG_LEVEL: Mutex<LogLevel> = Mutex::new(LogLevel::Info);
-static NO_COLORS: Mutex<bool> = Mutex::new(false);
 
-/// Configure logging from options (reference crawler `ConfigureOutput`).
+/// Configure logging from options (reference crawler `ConfigureOutput`:
+/// Silent > Verbose > Debug > Info precedence).
 pub fn configure_output(options: &Options) {
     let level = if options.silent {
         LogLevel::Silent
-    } else if options.debug {
-        LogLevel::Debug
     } else if options.verbose {
         LogLevel::Warning
+    } else if options.debug {
+        LogLevel::Debug
     } else {
         LogLevel::Info
     };
     *LOG_LEVEL.lock().unwrap() = level;
-    *NO_COLORS.lock().unwrap() = options.no_colors;
 }
 
 pub fn log(level: LogLevel, msg: &str) {
@@ -50,33 +50,40 @@ pub fn log(level: LogLevel, msg: &str) {
     if level > current {
         return;
     }
-    match level {
-        LogLevel::Debug => eprintln!("[DEBUG] {msg}"),
-        LogLevel::Info => eprintln!("[INF] {msg}"),
-        LogLevel::Warning => eprintln!("[WRN] {msg}"),
-        LogLevel::Error => eprintln!("[ERR] {msg}"),
-        LogLevel::Silent => {}
+    // Write instead of eprintln! so a closed stderr never panics.
+    let line = match level {
+        LogLevel::Debug => format!("[DEBUG] {msg}\n"),
+        LogLevel::Info => format!("[INF] {msg}\n"),
+        LogLevel::Warning => format!("[WRN] {msg}\n"),
+        LogLevel::Error => format!("[ERR] {msg}\n"),
+        LogLevel::Silent => return,
+    };
+    let mut err = std::io::stderr().lock();
+    let _ = err.write_all(line.as_bytes());
+    let _ = err.flush();
+}
+
+/// Writer-scoped color wrappers (results must not depend on the global
+/// logging color flag, which races between concurrent runs).
+impl StandardWriter {
+    fn w_blue(&self, s: &str) -> String {
+        if !self.no_colors { format!("\x1b[34m{s}\x1b[0m") } else { s.to_string() }
+    }
+    fn w_green(&self, s: &str) -> String {
+        if !self.no_colors { format!("\x1b[32m{s}\x1b[0m") } else { s.to_string() }
+    }
+    fn w_yellow(&self, s: &str) -> String {
+        if !self.no_colors { format!("\x1b[33m{s}\x1b[0m") } else { s.to_string() }
     }
 }
 
-fn colors_enabled() -> bool {
-    !*NO_COLORS.lock().unwrap()
-}
-
-fn blue(s: &str) -> String {
-    if colors_enabled() { format!("\x1b[34m{s}\x1b[0m") } else { s.to_string() }
-}
-fn green(s: &str) -> String {
-    if colors_enabled() { format!("\x1b[32m{s}\x1b[0m") } else { s.to_string() }
-}
-fn yellow(s: &str) -> String {
-    if colors_enabled() { format!("\x1b[33m{s}\x1b[0m") } else { s.to_string() }
-}
-
 /// The standard output writer (reference crawler `output.StandardWriter`).
+/// Output-time filtering (extension match, `-mr`/`-fr` regexes, `-mdc`/`-fdc`
+/// DSL conditions, `-fpt` page type) mirrors the reference `Write()` pipeline.
 pub struct StandardWriter {
     json: bool,
     verbose: bool,
+    no_colors: bool,
     fields: String,
     store_fields: String,
     store_field_dir: String,
@@ -88,6 +95,14 @@ pub struct StandardWriter {
     output_template: String,
     output_file: Option<Mutex<File>>,
     error_log: Option<Mutex<File>>,
+    // Output-time filter pipeline (reference crawler Write()).
+    extension_validator: crate::utils::extensions::ExtensionValidator,
+    match_regex: Vec<regex::Regex>,
+    filter_regex: Vec<regex::Regex>,
+    output_match_condition: String,
+    output_filter_condition: String,
+    filter_page_type: Vec<String>,
+    result_count: AtomicU64,
 }
 
 impl StandardWriter {
@@ -95,18 +110,12 @@ impl StandardWriter {
     pub fn from_options(options: &Options) -> StandardWriter {
         configure_output(options);
 
+        // The output file truncates on every run (reference crawler os.Create);
+        // -ncb applies to the store-response directory, not the output file.
         let output_file = if options.output_file.is_empty() {
             None
         } else {
-            let path = if options.no_clobber {
-                non_clobber_path(Path::new(&options.output_file))
-            } else {
-                PathBuf::from(&options.output_file)
-            };
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
+            File::create(&options.output_file)
                 .ok()
                 .map(Mutex::new)
         };
@@ -122,17 +131,24 @@ impl StandardWriter {
                 .map(Mutex::new)
         };
 
+        // Default store directories match the reference crawler naming
+        // (celestia rebrand of katana_response / katana_field).
         let store_response_dir = if options.store_response_dir.is_empty() {
-            "output".to_string()
+            "celestia_response".to_string()
+        } else if options.no_clobber {
+            non_clobber_dir(Path::new(&options.store_response_dir))
         } else {
             options.store_response_dir.clone()
         };
         if options.store_response {
             let _ = std::fs::create_dir_all(&store_response_dir);
+            // Pre-create/truncate the response index on startup.
+            let index = Path::new(&store_response_dir).join("index.txt");
+            let _ = File::create(&index);
         }
 
         let store_field_dir = if options.store_field_dir.is_empty() {
-            "fields".to_string()
+            "celestia_field".to_string()
         } else {
             options.store_field_dir.clone()
         };
@@ -143,6 +159,7 @@ impl StandardWriter {
         StandardWriter {
             json: options.json,
             verbose: options.verbose,
+            no_colors: options.no_colors,
             fields: options.fields.clone(),
             store_fields: options.store_fields.clone(),
             store_field_dir,
@@ -154,12 +171,93 @@ impl StandardWriter {
             output_template: options.output_template.clone(),
             output_file,
             error_log,
+            extension_validator: crate::utils::extensions::ExtensionValidator::new(
+                &options.extensions_match,
+                &options.extension_filter,
+                options.no_default_ext_filter,
+            ),
+            match_regex: options.match_regex.clone(),
+            filter_regex: options.filter_regex.clone(),
+            output_match_condition: options.output_match_condition.clone(),
+            output_filter_condition: options.output_filter_condition.clone(),
+            filter_page_type: options.filter_page_type.clone(),
+            result_count: AtomicU64::new(0),
         }
     }
 
-    /// Write a result to the configured destinations (reference crawler `StandardWriter.Write`).
-    pub fn write(&self, result: &mut Result) {
-        // Apply output omissions (-or/-ob) before formatting.
+    /// Number of results that produced output (reference crawler `resultCount`).
+    pub fn result_count(&self) -> u64 {
+        self.result_count.load(Ordering::SeqCst)
+    }
+
+    /// Write a result to the configured destinations (reference crawler
+    /// `StandardWriter.Write`). Returns Err(reason) when the result was
+    /// filtered out and produced no output.
+    pub fn write(&self, result: &mut Result) -> std::result::Result<(), String> {
+        let request_url = result
+            .request
+            .as_ref()
+            .map(|r| r.url.clone())
+            .unwrap_or_default();
+
+        // Skip empty responses (e.g. from similarity filtering).
+        if let Some(resp) = result.response.as_ref() {
+            if resp.body.is_empty() && result.error.is_empty() {
+                return Err("response filtered by similarity detection".to_string());
+            }
+        }
+
+        if !self.store_fields.is_empty() {
+            fields::store_fields(result, &self.store_fields, &self.store_field_dir);
+        }
+
+        if !self.extension_validator.validate_path(&request_url) {
+            return Err("result does not match extension filter".to_string());
+        }
+
+        // matchOutput: regex then DSL condition (-mr / -mdc).
+        if !self.match_regex.is_empty()
+            && !self.match_regex.iter().any(|r| r.is_match(&request_url))
+        {
+            return Err("result does not match output".to_string());
+        }
+        if !self.output_match_condition.is_empty() {
+            let ctx = self.dsl_context(result);
+            if !crate::utils::dsl::eval_bool(&self.output_match_condition, &ctx).unwrap_or(false) {
+                return Err("result does not match output".to_string());
+            }
+        }
+
+        // filterOutput: regex then DSL condition (-fr / -fdc).
+        if self.filter_regex.iter().any(|r| r.is_match(&request_url)) {
+            return Err("result is filtered out".to_string());
+        }
+        if !self.output_filter_condition.is_empty() {
+            let ctx = self.dsl_context(result);
+            if crate::utils::dsl::eval_bool(&self.output_filter_condition, &ctx).unwrap_or(false) {
+                return Err("result is filtered out".to_string());
+            }
+        }
+
+        // Page-type filter (-fpt).
+        if !self.filter_page_type.is_empty() {
+            if let Some(resp) = result.response.as_ref() {
+                if page_type_filtered(resp, &self.filter_page_type) {
+                    return Err("result filtered by page type".to_string());
+                }
+            }
+        }
+
+        // Store the raw response BEFORE applying omissions (reference
+        // crawler stores at output.go:214, omits at 234).
+        if self.store_response {
+            if let Some(path) = responses::store_response(result, &self.store_response_dir) {
+                if let Some(resp) = result.response.as_mut() {
+                    resp.stored_response_path = path;
+                }
+            }
+        }
+
         if self.omit_raw {
             if let Some(req) = result.request.as_mut() {
                 req.raw.clear();
@@ -174,29 +272,18 @@ impl StandardWriter {
             }
         }
 
-        // Attach stored response path when raw storage is on.
-        if self.store_response {
-            if let Some(path) = responses::store_response(result, &self.store_response_dir) {
-                if let Some(resp) = result.response.as_mut() {
-                    resp.stored_response_path = path;
-                }
-            }
-        }
-
-        if !self.store_fields.is_empty() {
-            fields::store_fields(result, &self.store_fields, &self.store_field_dir);
-        }
-
-        let formatted = if self.json {
-            self.format_json(result)
-        } else if !self.output_template.is_empty() {
+        // Format precedence: template > JSON > fields > screen
+        // (reference crawler output.go:246-256).
+        let formatted = if !self.output_template.is_empty() {
             self.format_template(result)
+        } else if self.json {
+            self.format_json(result)
         } else if !self.fields.is_empty() {
             let mut builder = String::new();
             for fop in fields::format_field(result, &self.fields) {
                 if self.verbose {
                     builder.push('[');
-                    builder.push_str(&blue(&fop.field));
+                    builder.push_str(&self.w_blue(&fop.field));
                     builder.push(']');
                     builder.push(' ');
                 }
@@ -208,17 +295,53 @@ impl StandardWriter {
             self.format_screen(result)
         };
 
+        if formatted.is_empty() {
+            return Err("result is empty".to_string());
+        }
+
+        // Increment result count only for valid results that produce output.
+        self.result_count.fetch_add(1, Ordering::SeqCst);
+
         // Results always print to stdout; `-silent` only silences log lines.
-        if !formatted.is_empty() {
-            print!("{formatted}");
-            let _ = std::io::stdout().flush();
+        // Write (instead of print!) so a closed pipe (e.g. `| head`) returns
+        // an error instead of panicking.
+        {
+            let mut out = std::io::stdout().lock();
+            let _ = out.write_all(formatted.as_bytes());
+            let _ = out.flush();
         }
 
         if let Some(file) = &self.output_file {
+            // Non-JSON file output is decolorized (reference crawler decolorizerRegex).
+            let data = if self.json {
+                formatted.clone()
+            } else {
+                decolorize(&formatted)
+            };
             if let Ok(mut f) = file.lock() {
-                let _ = f.write_all(formatted.as_bytes());
+                let _ = f.write_all(data.as_bytes());
                 let _ = f.flush();
             }
+        }
+
+        Ok(())
+    }
+
+    /// JSON context for DSL output conditions.
+    fn dsl_context(&self, result: &Result) -> serde_json::Value {
+        match (&result.request, &result.response) {
+            (Some(req), Some(resp)) => crate::engine::common::result_context(req, resp),
+            (Some(req), None) => {
+                serde_json::json!({
+                    "url": req.url,
+                    "method": req.method,
+                    "tag": req.tag,
+                    "attribute": req.attribute,
+                    "source": req.source,
+                    "depth": req.depth,
+                })
+            }
+            _ => serde_json::json!({}),
         }
     }
 
@@ -231,14 +354,14 @@ impl StandardWriter {
 
         if self.verbose && !request.tag.is_empty() {
             builder.push('[');
-            builder.push_str(&blue(&request.tag));
+            builder.push_str(&self.w_blue(&request.tag));
             builder.push(']');
             builder.push(' ');
         }
 
         if !request.method.is_empty() && self.verbose {
             builder.push('[');
-            builder.push_str(&green(&request.method));
+            builder.push_str(&self.w_green(&request.method));
             builder.push(']');
             builder.push(' ');
         }
@@ -255,7 +378,7 @@ impl StandardWriter {
         if self.verbose {
             builder.push(' ');
             builder.push('[');
-            builder.push_str(&yellow(&format!("depth:{}", request.depth)));
+            builder.push_str(&self.w_yellow(&format!("depth:{}", request.depth)));
             builder.push(']');
         }
 
@@ -294,9 +417,10 @@ impl StandardWriter {
         }
     }
 
-    /// Custom output template: `{{path.to.field}}` substitution over the
-    /// result's serialized JSON (native approximation of reference crawler `-ot`
-    /// text/template with `{{formatRequest .Request}}`).
+    /// Custom output template (reference crawler `-ot` fasttemplate): bare
+    /// `{{token}}` names resolve against the 14 field selectors plus custom
+    /// fields; an unknown tag drops the entire line. `{{.json.path}}` tokens
+    /// resolve against the serialized result (Rust extension).
     fn format_template(&self, result: &Result) -> String {
         let mut value = match serde_json::to_value(result) {
             Ok(v) => v,
@@ -304,16 +428,31 @@ impl StandardWriter {
         };
         apply_exclusions(&mut value, &self.exclude_output_fields);
 
+        // Field map: all 14 selectors + custom fields (reference crawler
+        // formatTemplate uses formatField(FieldNames) + custom fields).
+        let mut fields_map = std::collections::HashMap::new();
+        for fo in fields::format_field(result, &fields::FIELD_NAMES.join(",")) {
+            fields_map.insert(fo.field, fo.value);
+        }
+        if let Some(req) = &result.request {
+            for (name, values) in &req.custom_fields {
+                fields_map.insert(name.clone(), values.join(","));
+            }
+        }
+
         let mut out = self.output_template.clone();
-        // Replace {{formatRequest .Request}} and generic {{.path}} tokens.
         while let Some(start) = out.find("{{") {
             let Some(end_rel) = out[start..].find("}}") else { break };
             let end = start + end_rel + 2;
-            let token = out[start + 2..end - 2].trim();
+            let token = out[start + 2..end - 2].trim().to_string();
             let replacement = if let Some(path) = token.strip_prefix('.') {
                 lookup_json(&value, path.trim_start_matches('.'))
             } else {
-                String::new()
+                match fields_map.get(&token) {
+                    Some(v) => v.clone(),
+                    // Unknown tag: the whole line is ignored.
+                    None => return String::new(),
+                }
             };
             out.replace_range(start..end, &replacement);
         }
@@ -321,14 +460,81 @@ impl StandardWriter {
         out
     }
 
-    /// Write a request error line to the error log (reference crawler `-elog`).
-    pub fn write_error(&self, url: &str, error: &str) {
+    /// Write a request error entry to the error log (reference crawler
+    /// `WriteErr` marshals an `output.Error` JSON object).
+    pub fn write_error(&self, url: &str, source: &str, error: &str) {
+        let entry = serde_json::json!({
+            "timestamp": crate::types::result::now_rfc3339(),
+            "endpoint": url,
+            "source": source,
+            "error": error,
+        });
+        let data = serde_json::to_string(&entry).unwrap_or_default();
         if let Some(file) = &self.error_log {
             if let Ok(mut f) = file.lock() {
-                let _ = writeln!(f, "{url} {error}");
+                let _ = writeln!(f, "{data}");
             }
         }
     }
+}
+
+/// Strip ANSI escape sequences (reference crawler `decolorizerRegex`).
+fn decolorize(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip CSI sequences: ESC [ ... final-byte letter.
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&n) = chars.peek() {
+                    chars.next();
+                    if n.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Page-type heuristics for `-fpt error,captcha,parked` (native approximation
+/// of the reference crawler's dit page-type classifier).
+pub fn page_type_filtered(response: &crate::types::result::Response, filter: &[String]) -> bool {
+    if filter.is_empty() {
+        return false;
+    }
+    let body = response.body.to_lowercase();
+    for f in filter {
+        match f.as_str() {
+            "error" => {
+                if response.status_code >= 400
+                    || body.contains("page not found")
+                    || body.contains("internal server error")
+                {
+                    return true;
+                }
+            }
+            "captcha" => {
+                if body.contains("recaptcha")
+                    || body.contains("hcaptcha")
+                    || body.contains("turnstile")
+                {
+                    return true;
+                }
+            }
+            "parked" => {
+                if body.contains("domain is for sale") || body.contains("buy this domain") {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn apply_exclusions(value: &mut Value, excluded: &[String]) {
@@ -385,6 +591,40 @@ fn non_clobber_path(path: &Path) -> PathBuf {
         }
     }
     path.to_path_buf()
+}
+
+/// Non-clobbering directory name for store-response dirs
+/// (reference crawler `createDirNameNoClobber`: appends `-1`, `-2`, ...).
+fn non_clobber_dir(path: &Path) -> String {
+    non_clobber_path(path).to_string_lossy().to_string()
+}
+
+/// Deduplicate lines in every file under `dir` (reference crawler
+/// `folderutil.DedupeLinesInFiles("katana_field")` run after crawling).
+pub fn dedupe_lines_in_dir(dir: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut seen = std::collections::HashSet::new();
+        let mut out = String::with_capacity(content.len());
+        for line in content.lines() {
+            if seen.insert(line.to_string()) {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        if out != content {
+            let _ = std::fs::write(&path, out);
+        }
+    }
 }
 
 /// Format the URL list line for `-lof` (list output fields).
@@ -466,6 +706,39 @@ mod tests {
         let w = StandardWriter::from_options(&o);
         let line = w.format_template(&sample());
         assert!(line.contains("https://example.com/ => 200"), "{line}");
+    }
+
+    #[test]
+    fn test_format_template_field_names() {
+        let mut o = Options::with_defaults();
+        o.silent = true;
+        o.no_colors = true;
+        o.output_template = "{{fqdn}}{{path}}".into();
+        let w = StandardWriter::from_options(&o);
+        let line = w.format_template(&sample());
+        assert!(line.contains("example.com/"), "{line}");
+    }
+
+    #[test]
+    fn test_format_template_unknown_tag_drops_line() {
+        let mut o = Options::with_defaults();
+        o.silent = true;
+        o.output_template = "{{url}} {{bogus_tag}}".into();
+        let w = StandardWriter::from_options(&o);
+        let line = w.format_template(&sample());
+        assert_eq!(line, "", "unknown tag drops the whole line");
+    }
+
+    #[test]
+    fn test_dedupe_lines_in_dir() {
+        let tmp = std::env::temp_dir().join("bc_dedupe_dir");
+        let _ = std::fs::create_dir_all(&tmp);
+        let f = tmp.join("host_field.txt");
+        std::fs::write(&f, "a\nb\na\n").unwrap();
+        dedupe_lines_in_dir(tmp.to_str().unwrap());
+        let content = std::fs::read_to_string(&f).unwrap();
+        assert_eq!(content, "a\nb\n");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

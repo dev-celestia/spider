@@ -3,8 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::broadcast;
+
 use crate::exporter::FileStorageExporter;
 use crate::pipeline::BrowserPipeline;
+use crate::types::events::{CrawlerEvent, SessionSummary};
 use crate::types::{
     AnalysisCallback, CrawlSummary, PageIR, RenderMode, RenderOptions, StorageExporter,
     TimeoutStrategy, WaitUntil,
@@ -16,6 +19,7 @@ pub struct Browser {
     max_depth: usize,
     pipeline: BrowserPipeline,
     callback: Option<AnalysisCallback>,
+    events: Option<broadcast::Sender<CrawlerEvent>>,
 }
 
 impl Browser {
@@ -36,9 +40,32 @@ impl Browser {
         let dummy_callback: AnalysisCallback = Box::new(|_| Box::pin(async { Ok(()) }));
         let callback_ref = self.callback.as_ref().unwrap_or(&dummy_callback);
 
-        self.pipeline
+        if let Some(tx) = &self.events {
+            let _ = tx.send(CrawlerEvent::Started {
+                seeds: vec![self.start_url.clone()],
+                engine: "standard".to_string(),
+            });
+        }
+
+        let summary = self
+            .pipeline
             .run_streaming_crawl(&self.start_url, self.max_depth, callback_ref)
-            .await
+            .await?;
+
+        if let Some(tx) = &self.events {
+            let _ = tx.send(CrawlerEvent::Finished {
+                summary: SessionSummary {
+                    results: summary.pages_processed,
+                    skipped: 0,
+                    failed: 0,
+                    visited_urls: summary.visited_urls.clone(),
+                    duration_ms: 0,
+                    cancelled: false,
+                },
+            });
+        }
+
+        Ok(summary)
     }
 
     /// Asynchronously fetches and transforms a single page at `url` using the browser's pipeline configuration.
@@ -81,6 +108,7 @@ pub struct BrowserBuilder {
     exporter: Option<Arc<dyn StorageExporter>>,
     callback: Option<AnalysisCallback>,
     render_options: RenderOptions,
+    events: Option<broadcast::Sender<CrawlerEvent>>,
 }
 
 impl BrowserBuilder {
@@ -163,6 +191,14 @@ impl BrowserBuilder {
         self
     }
 
+    /// Attaches a `tokio::sync::broadcast` event channel for UI consumers.
+    /// The crawl emits `Started`, `PageFetched`, `PageError`, `LinkDiscovered`,
+    /// and `Finished` events on it.
+    pub fn events_channel(mut self, events: broadcast::Sender<CrawlerEvent>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
     /// Helper method allowing inline async closures for Phase 3 content analysis.
     pub fn on_page<F, Fut>(mut self, f: F) -> Self
     where
@@ -193,17 +229,21 @@ impl BrowserBuilder {
             }
         };
 
-        let pipeline = BrowserPipeline::builder()
+        let mut pipeline_builder = BrowserPipeline::builder()
             .user_agent(&user_agent)
             .render_options(self.render_options)
-            .exporter(exporter)
-            .build();
+            .exporter(exporter);
+        if let Some(events) = self.events.clone() {
+            pipeline_builder = pipeline_builder.events_channel(events);
+        }
+        let pipeline = pipeline_builder.build();
 
         Ok(Browser {
             start_url,
             max_depth,
             pipeline,
             callback: self.callback,
+            events: self.events,
         })
     }
 }

@@ -1,5 +1,7 @@
-//! Shared end-to-end test fixtures: a dependency-free HTTP test server with
-//! static routes, request recording, and per-path hit counts.
+//! Shared end-to-end test fixtures: HTTP test servers (async + blocking)
+//! with static routes, request recording, and per-path hit counts.
+#![allow(dead_code)]
+
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};

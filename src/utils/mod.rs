@@ -2,6 +2,8 @@
 
 pub mod dsl;
 pub mod extensions;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod fieldconfig;
 pub mod filters;
 pub mod formfill;
 pub mod knownfiles;

@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use md5::{Digest, Md5};
 
-use crate::utils::similarity::SimHash;
+use crate::utils::similarity::{jaccard_similarity, SimHash};
 
 /// celestia filter limits.
 pub const MAX_CHROME_URL_LENGTH: usize = 2_097_152;
@@ -86,103 +86,296 @@ pub fn longest_repeating_sequence(s: &str) -> Option<(String, usize)> {
     best
 }
 
-/// Trie of path segments used by `-filter-similar` to normalize variable path
-/// segments (reference crawler `pkg/utils/pathtrie.go`): positions with >= `threshold`
-/// distinct values at the same parent are treated as parameters (`*`).
+/// Adaptive per-host path trie used by `-filter-similar`
+/// (reference crawler `pkg/utils/pathtrie.go` + `urlfingerprint.go`):
+/// path positions with more than `threshold` distinct children are
+/// *permanently promoted* to `{param}`.
 #[derive(Debug, Default)]
 pub struct PathTrie {
-    root: TrieNode,
+    hosts: std::collections::HashMap<String, std::sync::Arc<Mutex<TrieNode>>>,
+    threshold: usize,
 }
+
+const PATH_TRIE_MAX_HOSTS: usize = 10_000;
 
 #[derive(Debug, Default)]
 struct TrieNode {
-    children: std::collections::HashMap<String, TrieNode>,
-    terminal: bool,
+    children: std::collections::HashMap<String, std::sync::Arc<Mutex<TrieNode>>>,
+    promoted: bool,
+    param_child: Option<std::sync::Arc<Mutex<TrieNode>>>,
 }
 
 impl PathTrie {
-    pub fn new() -> Self {
-        PathTrie::default()
+    pub fn new(threshold: usize) -> Self {
+        PathTrie { hosts: std::collections::HashMap::new(), threshold: threshold.max(1) }
     }
 
-    /// Record a URL path in the trie.
-    pub fn insert(&mut self, path: &str) {
-        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let mut node = &mut self.root;
-        for seg in &segments {
-            node = node.children.entry((*seg).to_string()).or_default();
+    fn host_root(&mut self, host: &str) -> std::sync::Arc<Mutex<TrieNode>> {
+        if !self.hosts.contains_key(host) {
+            if self.hosts.len() >= PATH_TRIE_MAX_HOSTS {
+                // Simple cap: drop an arbitrary host when the bound is hit.
+                if let Some(k) = self.hosts.keys().next().cloned() {
+                    self.hosts.remove(&k);
+                }
+            }
+            self.hosts.insert(host.to_string(), std::sync::Arc::default());
         }
-        node.terminal = true;
+        self.hosts.get(host).cloned().expect("just inserted")
     }
 
-    /// Normalize a path: walk the trie replacing any position whose parent has
-    /// >= `threshold` children with `*`. Returns the normalized path plus the
-    /// collapsed prefix when a variable position was crossed (e.g. `/users`
-    /// for `/users/*`), so callers can learn variable positions globally
-    /// (the reference crawler's "simplify" behavior).
-    pub fn normalize(&mut self, path: &str, threshold: usize) -> (String, Option<String>) {
-        // Ensure the path is registered first.
-        self.insert(path);
-
-        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let mut normalized = String::new();
-        let mut collapsed_prefix: Option<String> = None;
-        let mut node = &self.root;
-        for seg in &segments {
-            if node.children.len() >= threshold {
-                normalized.push_str("/*");
-                collapsed_prefix = Some(if normalized == "/*" {
-                    "/".to_string()
-                } else {
-                    normalized.trim_end_matches("/*").to_string()
-                });
-                break;
+    /// Walk (and register) the segments in the trie for the given host,
+    /// returning the segments with promoted positions replaced by `{param}`
+    /// (reference crawler `PathTrie.Fingerprint`).
+    pub fn fingerprint(&mut self, host: &str, segments: &[String]) -> Vec<String> {
+        let root = self.host_root(host);
+        let mut result = Vec::with_capacity(segments.len());
+        let mut current = root;
+        for seg in segments {
+            let mut node = current.lock().unwrap();
+            if node.promoted {
+                let next = node
+                    .param_child
+                    .clone()
+                    .unwrap_or_else(std::sync::Arc::default);
+                drop(node);
+                result.push("{param}".to_string());
+                current = next;
+                continue;
             }
-            match node.children.get(*seg) {
-                Some(c) => {
-                    normalized.push('/');
-                    normalized.push_str(seg);
-                    node = c;
-                }
-                None => {
-                    normalized.push('/');
-                    normalized.push_str(seg);
-                    break;
+            if !node.children.contains_key(seg) {
+                node.children.insert(seg.clone(), std::sync::Arc::default());
+                if node.children.len() > self.threshold {
+                    let next: std::sync::Arc<Mutex<TrieNode>> = std::sync::Arc::default();
+                    drop(node);
+                    {
+                        let mut n = current.lock().unwrap();
+                        n.promoted = true;
+                        n.param_child = Some(next.clone());
+                        n.children.clear();
+                    }
+                    result.push("{param}".to_string());
+                    current = next;
+                    continue;
                 }
             }
+            let next = node.children.get(seg).cloned().expect("just inserted");
+            drop(node);
+            result.push(seg.clone());
+            current = next;
         }
-        if normalized.is_empty() {
-            normalized.push('/');
-        }
-        (normalized, collapsed_prefix)
+        result
     }
 }
 
-/// Content similarity index (reference crawler `pkg/similarity`): tracks simhash values of
-/// processed pages and reports near-duplicates within a Hamming distance.
+/// Layer-1 segment patterns, most specific first (reference crawler
+/// `segmentPatterns`): uuid, sha256, sha1, md5, oid, hex, date, ts, num.
+fn normalize_segment(segment: &str) -> Option<&'static str> {
+    let contains_hex_letter = segment
+        .bytes()
+        .any(|b| matches!(b, b'a'..=b'f' | b'A'..=b'F'));
+    let is_hex = |s: &str| s.bytes().all(|b| b.is_ascii_hexdigit());
+    if segment.len() == 36
+        && segment.as_bytes()[8] == b'-'
+        && regex::Regex::new(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+            .expect("uuid regex")
+            .is_match(segment)
+    {
+        return Some("{uuid}");
+    }
+    if segment.len() == 64 && is_hex(segment) && contains_hex_letter {
+        return Some("{sha256}");
+    }
+    if segment.len() == 40 && is_hex(segment) && contains_hex_letter {
+        return Some("{sha1}");
+    }
+    if segment.len() == 32 && is_hex(segment) && contains_hex_letter {
+        return Some("{md5}");
+    }
+    if segment.len() == 24 && is_hex(segment) && contains_hex_letter {
+        return Some("{oid}");
+    }
+    if segment.len() >= 8 && is_hex(segment) && contains_hex_letter {
+        return Some("{hex}");
+    }
+    if segment.len() == 10
+        && segment.as_bytes()[4] == b'-'
+        && regex::Regex::new(r"^\d{4}-\d{2}-\d{2}$").expect("date regex").is_match(segment)
+    {
+        return Some("{date}");
+    }
+    if regex::Regex::new(r"^\d{10}(\d{3})?$").expect("ts regex").is_match(segment) {
+        return Some("{ts}");
+    }
+    if !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit()) {
+        return Some("{num}");
+    }
+    None
+}
+
+/// Structural fingerprint of a URL (reference crawler `utils.FingerprintURL`):
+/// layer-1 regex segment normalization, layer-2 adaptive per-host trie, and
+/// layer-3 query keys (sorted, values dropped). Registers the path in the trie.
+pub fn fingerprint_url(raw_url: &str, trie: &mut PathTrie) -> String {
+    let Ok(u) = url::Url::parse(raw_url) else {
+        return raw_url.to_string();
+    };
+    let path = u.path();
+    let fingerprinted = if path.is_empty() || path == "/" {
+        "/".to_string()
+    } else {
+        let trimmed = path.trim_matches('/');
+        let mut segments: Vec<String> = if trimmed.is_empty() {
+            Vec::new()
+        } else {
+            trimmed.split('/').map(|s| s.to_string()).collect()
+        };
+        // Layer 1: heuristic regex normalization.
+        for seg in &mut segments {
+            if let Some(placeholder) = normalize_segment(seg) {
+                *seg = placeholder.to_string();
+            }
+        }
+        // Layer 2: adaptive trie normalization.
+        let segments = trie.fingerprint(u.host_str().unwrap_or(""), &segments);
+        let mut p = format!("/{}", segments.join("/"));
+        if path.ends_with('/') {
+            p.push('/');
+        }
+        p
+    };
+
+    let mut out = String::new();
+    if !u.scheme().is_empty() {
+        out.push_str(u.scheme());
+        out.push_str("://");
+    }
+    out.push_str(&match u.port() {
+        Some(port) => format!("{}:{}", u.host_str().unwrap_or(""), port),
+        None => u.host_str().unwrap_or("").to_string(),
+    });
+    out.push_str(&fingerprinted);
+    if u.query().map(|q| !q.is_empty()).unwrap_or(false) {
+        let mut keys: Vec<String> = u.query_pairs().map(|(k, _)| k.to_string()).collect();
+        keys.sort();
+        keys.dedup();
+        if !keys.is_empty() {
+            out.push('?');
+            out.push_str(&keys.join("&"));
+        }
+    }
+    out
+}
+
+/// Content similarity index (reference crawler `pkg/similarity`): tracks
+/// fingerprints of processed pages and reports near-duplicates. SimHash mode
+/// compares Hamming distance; tfidf/bm25 modes use the Jaccard approximation
+/// with a score threshold and a per-cluster processing budget.
 #[derive(Debug, Default)]
 pub struct SimilarityIndex {
-    entries: Mutex<Vec<(String, u64)>>, // (url, simhash)
+    entries: Mutex<Vec<SimilarityEntry>>,
+    mode: crate::types::options::SimilarityMode,
     distance: u32,
+    threshold: f64,
+    budget: usize,
+    /// Pages evaluated (reference crawler similarity Stats.processed).
+    processed: std::sync::atomic::AtomicUsize,
+    /// Pages passed through (Stats.accepted).
+    accepted: std::sync::atomic::AtomicUsize,
+    /// Pages dropped as similar (Stats.filtered).
+    filtered: std::sync::atomic::AtomicUsize,
+}
+
+/// Aggregate similarity-filter counters (reference crawler `similarity.Stats`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SimilarityStats {
+    pub processed: usize,
+    pub accepted: usize,
+    pub filtered: usize,
+}
+
+#[derive(Debug, Default)]
+struct SimilarityEntry {
+    simhash: u64,
+    body: String,
+    processed: usize,
 }
 
 impl SimilarityIndex {
-    pub fn new(distance: u32) -> Self {
-        SimilarityIndex { entries: Mutex::new(Vec::new()), distance }
+    pub fn new(
+        mode: crate::types::options::SimilarityMode,
+        distance: u32,
+        threshold: f64,
+        budget: usize,
+    ) -> Self {
+        SimilarityIndex {
+            entries: Mutex::new(Vec::new()),
+            mode,
+            distance,
+            threshold,
+            budget: budget.max(1),
+            processed: std::sync::atomic::AtomicUsize::new(0),
+            accepted: std::sync::atomic::AtomicUsize::new(0),
+            filtered: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Aggregate filter counters.
+    pub fn stats(&self) -> SimilarityStats {
+        use std::sync::atomic::Ordering;
+        SimilarityStats {
+            processed: self.processed.load(Ordering::SeqCst),
+            accepted: self.accepted.load(Ordering::SeqCst),
+            filtered: self.filtered.load(Ordering::SeqCst),
+        }
+    }
+
+    /// Similarity mode name (reference crawler `ContentSimilarity.Mode()`).
+    pub fn mode_name(&self) -> &'static str {
+        match self.mode {
+            crate::types::options::SimilarityMode::SimHash => "simhash",
+            crate::types::options::SimilarityMode::TfIdf => "tfidf",
+            crate::types::options::SimilarityMode::Bm25 => "bm25",
+        }
     }
 
     /// Returns true if content is similar to an already-seen page.
-    pub fn is_similar(&self, url: &str, content: &str) -> bool {
-        let hash = SimHash::hash(content);
+    pub fn is_similar(&self, _url: &str, content: &str) -> bool {
+        use std::sync::atomic::Ordering;
+        self.processed.fetch_add(1, Ordering::SeqCst);
         let mut entries = self.entries.lock().unwrap();
-        for (seen_url, seen_hash) in entries.iter() {
-            let d = SimHash::hamming_distance(hash, *seen_hash);
-            if d <= self.distance {
-                return true;
+        let similar = match self.mode {
+            crate::types::options::SimilarityMode::SimHash => {
+                let hash = SimHash::hash(content);
+                entries
+                    .iter()
+                    .any(|entry| SimHash::hamming_distance(hash, entry.simhash) <= self.distance)
             }
-            let _ = seen_url;
+            _ => {
+                // tfidf/bm25 approximation: Jaccard token similarity against
+                // each cluster representative, honoring the per-cluster budget
+                // (pages fully processed per similarity cluster, `-pcsn`).
+                for entry in entries.iter_mut() {
+                    if jaccard_similarity(content, &entry.body) >= self.threshold {
+                        if entry.processed < self.budget {
+                            entry.processed += 1;
+                            return false;
+                        }
+                        return true;
+                    }
+                }
+                false
+            }
+        };
+        if similar {
+            self.filtered.fetch_add(1, Ordering::SeqCst);
+            return true;
         }
-        entries.push((url.to_string(), hash));
+        entries.push(SimilarityEntry {
+            simhash: SimHash::hash(content),
+            body: content.to_string(),
+            processed: 1,
+        });
+        self.accepted.fetch_add(1, Ordering::SeqCst);
         false
     }
 }
@@ -224,26 +417,78 @@ mod tests {
 
     #[test]
     fn test_similarity_index() {
-        let idx = SimilarityIndex::new(3);
+        let idx = SimilarityIndex::new(
+            crate::types::options::SimilarityMode::SimHash,
+            3,
+            0.85,
+            1,
+        );
         assert!(!idx.is_similar("u1", "The quick brown fox jumps over the lazy dog"));
         assert!(idx.is_similar("u2", "The quick brown fox jumps over the lazy dog!"));
         assert!(!idx.is_similar("u3", "Completely different content about rust programming languages and compilers"));
     }
 
     #[test]
-    fn test_path_trie_normalize() {
-        let mut t = PathTrie::new();
-        t.insert("/users/123");
-        t.insert("/users/456");
-        let (norm, collapsed) = t.normalize("/users/123", 10);
-        assert_eq!(norm, "/users/123");
-        assert_eq!(collapsed, None);
+    fn test_similarity_index_jaccard_mode_budget() {
+        // tfidf mode with budget 1: first similar page is processed once, the
+        // next is skipped.
+        let idx = SimilarityIndex::new(
+            crate::types::options::SimilarityMode::TfIdf,
+            3,
+            0.7,
+            1,
+        );
+        let a = "the quick brown fox jumps over the lazy dog";
+        assert!(!idx.is_similar("u1", a));
+        assert!(idx.is_similar("u2", a));
+    }
 
-        // With threshold 2, /users has 2 distinct children so position 2 collapses.
-        let mut t = PathTrie::new();
-        t.insert("/users/123");
-        let (norm, collapsed) = t.normalize("/users/456", 2);
-        assert_eq!(norm, "/users/*");
-        assert_eq!(collapsed.as_deref(), Some("/users"));
+    #[test]
+    fn test_path_trie_promotion() {
+        // Below threshold: segments are kept.
+        let mut t = PathTrie::new(10);
+        assert_eq!(t.fingerprint("h", &["users".into(), "123".into()]), vec!["users", "123"]);
+        assert_eq!(t.fingerprint("h", &["users".into(), "456".into()]), vec!["users", "456"]);
+
+        // Above threshold (more than 2 children at position 2): permanently promoted.
+        let mut t = PathTrie::new(2);
+        let _ = t.fingerprint("h", &["users".into(), "123".into()]);
+        let _ = t.fingerprint("h", &["users".into(), "456".into()]);
+        let out = t.fingerprint("h", &["users".into(), "789".into()]);
+        assert_eq!(out, vec!["users", "{param}"]);
+        // Promotion persists for subsequent walks.
+        let out = t.fingerprint("h", &["users".into(), "abc".into()]);
+        assert_eq!(out, vec!["users", "{param}"]);
+    }
+
+    #[test]
+    fn test_normalize_segment() {
+        assert_eq!(normalize_segment("550e8400-e29b-41d4-a716-446655440000"), Some("{uuid}"));
+        assert_eq!(normalize_segment("2024-01-15"), Some("{date}"));
+        assert_eq!(normalize_segment("1700000000"), Some("{ts}"));
+        assert_eq!(normalize_segment("12345"), Some("{num}"));
+        assert_eq!(normalize_segment("deadbeef"), Some("{hex}"));
+        // Pure-digit segments >= 8 fall through hex to timestamp/numeric
+        // (reference crawler containsHexLetter validation).
+        assert_eq!(normalize_segment("12345678"), Some("{num}"));
+        assert_eq!(normalize_segment("1700000000"), Some("{ts}"));
+        assert_eq!(normalize_segment("17000000000000"), Some("{num}"));
+        assert_eq!(normalize_segment("users"), None);
+    }
+
+    #[test]
+    fn test_fingerprint_url() {
+        let mut t = PathTrie::new(10);
+        // Layer 1 + layer 3: variable segments normalized, only the sorted
+        // query KEYS survive (values are dropped).
+        assert_eq!(
+            fingerprint_url("https://x.com/users/123?b=2&a=1", &mut t),
+            "https://x.com/users/{num}?a&b"
+        );
+        // Duplicate keys collapse.
+        assert_eq!(
+            fingerprint_url("https://x.com/p?a=1&a=2", &mut t),
+            "https://x.com/p?a"
+        );
     }
 }

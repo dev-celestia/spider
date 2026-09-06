@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use crate::control::CrawlControl;
 use crate::engine::common::{Crawler, PageFetch};
 use crate::output::StandardWriter;
 use crate::types::options::Options;
@@ -23,7 +24,10 @@ impl StandardFetcher {
     pub fn from_options(options: &Options) -> std::result::Result<StandardFetcher, String> {
         let mut builder = reqwest::Client::builder()
             .user_agent(crate::utils::regex::web_user_agent())
-            .timeout(Duration::from_secs(options.timeout.max(1)));
+            .timeout(Duration::from_secs(options.timeout.max(1)))
+            // Cookie jar: send + collect cookies per request
+            // (reference crawler `Shared.Jar`).
+            .cookie_store(true);
 
         if options.disable_redirects {
             builder = builder.redirect(reqwest::redirect::Policy::none());
@@ -47,11 +51,12 @@ impl StandardFetcher {
         })
     }
 
-    /// Merge per-request headers over the global custom headers
-    /// (reference crawler `ParseCustomHeaders` applied at request time).
+    /// Merge headers: per-request headers are applied first and the global
+    /// custom headers win (reference crawler applies `request.Headers` then
+    /// `c.Headers` at request time).
     fn merge_headers(&self, request: &Request) -> Headers {
-        let mut headers = self.custom_headers.clone();
-        for (k, v) in &request.headers {
+        let mut headers = request.headers.clone();
+        for (k, v) in &self.custom_headers {
             headers.insert(k.clone(), v.clone());
         }
         headers
@@ -72,7 +77,7 @@ impl PageFetch for StandardFetcher {
             req = req.body(request.body.clone());
         }
 
-        let resp = req
+        let mut resp = req
             .send()
             .await
             .map_err(|e| format!("HTTP request failed: {e}"))?;
@@ -83,11 +88,35 @@ impl PageFetch for StandardFetcher {
             headers.insert(k.to_string(), v.to_str().unwrap_or("").to_string());
         }
         let content_length = resp.content_length().unwrap_or(0) as i64;
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| format!("failed to read response body: {e}"))?;
-        let body = body[..body.len().min(self.body_read_size)].to_string();
+
+        // Stream the body capped at `body_read_size` bytes
+        // (reference crawler `io.LimitReader(resp.Body, BodyReadSize)`).
+        let mut body_bytes: Vec<u8> = Vec::new();
+        while body_bytes.len() < self.body_read_size {
+            match resp.chunk().await {
+                Ok(Some(chunk)) => {
+                    let remaining = self.body_read_size - body_bytes.len();
+                    let take = remaining.min(chunk.len());
+                    body_bytes.extend_from_slice(&chunk[..take]);
+                }
+                Ok(None) => break,
+                Err(e) => return Err(format!("failed to read response body: {e}")),
+            }
+        }
+        // Lossy UTF-8 conversion (never panics on non-char boundaries).
+        let body = String::from_utf8_lossy(&body_bytes).to_string();
+
+        // Raw wire dumps (reference crawler populates `Request.Raw`/`Response.Raw`).
+        let response_raw = format!(
+            "HTTP/1.1 {}\r\n{}\r\n{}",
+            status_code,
+            headers
+                .iter()
+                .map(|(k, v)| format!("{k}: {v}"))
+                .collect::<Vec<_>>()
+                .join("\r\n"),
+            body
+        );
 
         Ok(Response {
             depth: request.depth,
@@ -97,6 +126,7 @@ impl PageFetch for StandardFetcher {
             body,
             root_hostname: request.root_hostname.clone(),
             source: request.url.clone(),
+            raw: response_raw,
             ..Default::default()
         })
     }
@@ -107,11 +137,11 @@ impl PageFetch for StandardFetcher {
 pub async fn crawl_standard(
     options: Arc<Options>,
     writer: Arc<StandardWriter>,
-    cancel: Arc<std::sync::atomic::AtomicBool>,
+    control: Arc<CrawlControl>,
     seed: &str,
 ) -> std::result::Result<Arc<Crawler>, String> {
     let fetcher = Arc::new(StandardFetcher::from_options(&options)?);
-    let crawler = Arc::new(Crawler::new(options, fetcher, writer, cancel)?);
+    let crawler = Arc::new(Crawler::new(options, fetcher, writer, control)?);
     crawler.crawl(seed).await?;
     Ok(crawler)
 }
@@ -143,13 +173,14 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_headers_request_wins() {
+    fn test_merge_headers_custom_win() {
         let mut o = Options::with_defaults();
         o.custom_headers.insert("X-Global".into(), "g".into());
         let f = StandardFetcher::from_options(&o).unwrap();
         let mut req = Request::default();
         req.headers.insert("X-Global".into(), "local".into());
         let merged = f.merge_headers(&req);
-        assert_eq!(merged.get("X-Global").unwrap(), "local");
+        // Reference crawler: custom headers are applied after request headers.
+        assert_eq!(merged.get("X-Global").unwrap(), "g");
     }
 }

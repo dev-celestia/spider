@@ -54,31 +54,96 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## UI / GUI Integration (Tauri, Electron, egui, ...)
+//!
+//! For UI hosts, [`CrawlSession`] is the integration surface: a serde-serializable
+//! [`CrawlConfig`], a broadcast [`CrawlerEvent`] stream, and a
+//! [`crate::CrawlSessionHandle`] with `cancel` / `pause` / `resume` / `join`.
+//! See `docs/UI_INTEGRATION.md` for full recipes.
+//!
+//! ```rust,no_run
+//! use browser_crawler::{CrawlConfig, CrawlSession, CrawlerEvent};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), String> {
+//!     let session = CrawlSession::spawn(CrawlConfig {
+//!         urls: vec!["https://example.com".into()],
+//!         max_depth: 2,
+//!         ..Default::default()
+//!     })?;
+//!     let mut events = session.take_events().unwrap();
+//!
+//!     // In a real UI: forward each event to the window (Tauri emit, IPC, ...).
+//!     tokio::spawn(async move {
+//!         while let Ok(event) = events.recv().await {
+//!             if let CrawlerEvent::Finished { summary } = event {
+//!                 println!("done: {} pages", summary.results);
+//!                 break;
+//!             }
+//!         }
+//!     });
+//!
+//!     // From a UI button: session.pause() / session.resume() / session.cancel()
+//!     let summary = session.join().await?;
+//!     println!("visited {} urls", summary.visited_urls.len());
+//!     Ok(())
+//! }
+//! ```
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod builder;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod control;
 pub mod engine;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod exporter;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod mapper;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod output;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod pipeline;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod renderer;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod runner;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod session;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod stealth;
 pub mod transformer;
 pub mod types;
 pub mod utils;
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use builder::{Browser, BrowserBuilder};
+#[cfg(not(target_arch = "wasm32"))]
+pub use control::CrawlControl;
+#[cfg(not(target_arch = "wasm32"))]
 pub use engine::common::{Crawler, PageFetch};
+#[cfg(not(target_arch = "wasm32"))]
 pub use exporter::{FileStorageExporter, FileStorageExporterBuilder};
+#[cfg(not(target_arch = "wasm32"))]
 pub use mapper::{SiteMapper, SiteMapperBuilder};
+#[cfg(not(target_arch = "wasm32"))]
 pub use output::{configure_output, StandardWriter};
+#[cfg(not(target_arch = "wasm32"))]
 pub use pipeline::{BrowserPipeline, BrowserPipelineBuilder, CrawlerPipeline};
+#[cfg(not(target_arch = "wasm32"))]
 pub use renderer::{crawl_single_page, PageFetcher};
+#[cfg(not(target_arch = "wasm32"))]
 pub use runner::{Runner, RunnerSummary};
+#[cfg(not(target_arch = "wasm32"))]
+pub use session::{CrawlConfig, CrawlSession, CrawlSessionHandle, SessionPhase, SessionSnapshot};
+#[cfg(not(target_arch = "wasm32"))]
 pub use stealth::{stealth_chrome_args, STEALTH_JS};
 pub use transformer::{extract_links, transform_html_to_ir};
 pub use types::result::Result as CrawlResult;
+pub use types::events::{CrawlerEvent, SessionSummary};
 pub use types::{
     AnalysisCallback, CrawlSummary, Options, PageIR, RenderMode, RenderOptions, Request, Response,
     SitemapNode, Strategy, StorageExporter, TimeoutStrategy, WaitUntil,

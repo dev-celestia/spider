@@ -3,11 +3,13 @@ use reqwest::Client;
 use scraper::{Html, Selector};
 use std::collections::VecDeque;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use url::Url;
 
 use crate::exporter::FileStorageExporter;
 use crate::renderer::PageFetcher;
 use crate::transformer::transform_html_to_ir;
+use crate::types::events::CrawlerEvent;
 use crate::types::{AnalysisCallback, CrawlSummary, RenderOptions, SitemapNode, StorageExporter};
 
 /// Internal task entry pushed onto the navigation queue.
@@ -23,6 +25,7 @@ pub struct BrowserPipelineBuilder {
     user_agent: String,
     render_options: RenderOptions,
     exporter: Option<Arc<dyn StorageExporter>>,
+    events: Option<broadcast::Sender<CrawlerEvent>>,
 }
 
 impl BrowserPipelineBuilder {
@@ -32,6 +35,7 @@ impl BrowserPipelineBuilder {
             user_agent: "RustAIBrowser/1.0".to_string(),
             render_options: RenderOptions::default(),
             exporter: None,
+            events: None,
         }
     }
 
@@ -53,6 +57,13 @@ impl BrowserPipelineBuilder {
         self
     }
 
+    /// Attaches a `tokio::sync::broadcast` event channel for UI consumers
+    /// (Tauri windows, WebSockets, live logs).
+    pub fn events_channel(mut self, events: broadcast::Sender<CrawlerEvent>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
     /// Builds the [`BrowserPipeline`].
     pub fn build(self) -> BrowserPipeline {
         let client = Client::builder()
@@ -66,7 +77,11 @@ impl BrowserPipelineBuilder {
             .exporter
             .unwrap_or_else(|| Arc::new(FileStorageExporter::default()));
 
-        BrowserPipeline { fetcher, exporter }
+        BrowserPipeline {
+            fetcher,
+            exporter,
+            events: self.events,
+        }
     }
 }
 
@@ -74,6 +89,15 @@ impl BrowserPipelineBuilder {
 pub struct BrowserPipeline {
     fetcher: PageFetcher,
     exporter: Arc<dyn StorageExporter>,
+    events: Option<broadcast::Sender<CrawlerEvent>>,
+}
+
+impl BrowserPipeline {
+    fn emit(&self, event: CrawlerEvent) {
+        if let Some(tx) = &self.events {
+            let _ = tx.send(event);
+        }
+    }
 }
 
 /// Backwards-compatible type alias for [`BrowserPipeline`].
@@ -130,6 +154,10 @@ impl BrowserPipeline {
             let html = match self.fetcher.fetch_html(&task.url).await {
                 Ok(html) => html,
                 Err(err) => {
+                    self.emit(CrawlerEvent::PageError {
+                        url: task.url.clone(),
+                        error: err.clone(),
+                    });
                     eprintln!("[Warning] Failed to fetch URL '{}': {}", task.url, err);
                     continue;
                 }
@@ -140,6 +168,14 @@ impl BrowserPipeline {
             total_ir_bytes += ir.markdown_ir.len();
             pages_processed += 1;
             visited_urls.push(task.url.clone());
+            self.emit(CrawlerEvent::PageFetched {
+                url: task.url.clone(),
+                status_code: 200,
+                depth: task.depth as i32,
+                content_length: html.len() as i64,
+                forms: 0,
+                technologies: Vec::new(),
+            });
 
             // Phase 3: Execute user callback logic
             if let Err(err) = callback(ir.clone()).await {
@@ -167,6 +203,11 @@ impl BrowserPipeline {
                                     if !visited.contains(&link) {
                                         visited.insert(link.clone());
                                         // PUSH discovered child task to navigation queue!
+                                        self.emit(CrawlerEvent::LinkDiscovered {
+                                            url: link.clone(),
+                                            from: task.url.clone(),
+                                            depth: (task.depth + 1) as i32,
+                                        });
                                         queue.push_back(CrawlTask {
                                             url: link,
                                             depth: task.depth + 1,

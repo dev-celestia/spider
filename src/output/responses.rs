@@ -17,10 +17,17 @@ fn response_hash(url: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Host directory component (reference crawler `getResponseHost`).
+/// Host directory component (reference crawler `getResponseHost`): the host
+/// keeps its explicit port, with `:` replaced by `_` (`host_8080`).
 fn response_host(url: &str) -> String {
     url::Url::parse(url)
-        .map(|u| u.host_str().unwrap_or("").replace(':', "_"))
+        .map(|u| {
+            let host = u.host_str().unwrap_or("").to_string();
+            match u.port() {
+                Some(port) => format!("{host}_{port}"),
+                None => host,
+            }
+        })
         .unwrap_or_default()
 }
 
@@ -71,15 +78,26 @@ pub fn store_response(result: &Result, dir: &str) -> Option<String> {
     let _ = std::fs::create_dir_all(&host_dir);
     let file = host_dir.join(format!("{}.txt", response_hash(&request.url)));
 
-    let raw_req = format_raw_request(&request.method, &request.url, &request.body, &request.headers);
-    let raw_resp = format_raw_response(response.status_code, &response.headers, &response.body);
+    // Store the actual wire dumps when populated (reference crawler writes
+    // Request.Raw / Response.Raw); fall back to reconstruction.
+    let raw_req = if request.raw.is_empty() {
+        format_raw_request(&request.method, &request.url, &request.body, &request.headers)
+    } else {
+        request.raw.clone()
+    };
+    let raw_resp = if response.raw.is_empty() {
+        format_raw_response(response.status_code, &response.headers, &response.body)
+    } else {
+        response.raw.clone()
+    };
     let content = format!("{}\n\n\n{}\n\n{}", request.url, raw_req, raw_resp);
 
     if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(&file) {
         let _ = f.write_all(content.as_bytes());
     }
 
-    // Update the index file.
+    // Update the index file (status includes the code; the reference crawler
+    // writes the full status text where available).
     let index = Path::new(dir).join("index.txt");
     if let Ok(mut idx) = OpenOptions::new().create(true).append(true).open(&index) {
         let _ = writeln!(

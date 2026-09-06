@@ -1,5 +1,8 @@
+pub mod events;
 pub mod options;
 pub mod result;
+
+pub use events::{CrawlerEvent, SessionSummary};
 
 pub use options::{
     parse_custom_headers, parse_headless_optional_arguments, KnownFiles, OnResultCallback,

@@ -67,22 +67,17 @@ pub fn format_field(result: &Result, fields: &str) -> Vec<FieldValue> {
         Err(_) => return values,
     };
 
-    let query_keys: Vec<String> = parsed
-        .query_pairs()
-        .filter_map(|(k, _)| if k.is_empty() { None } else { Some(k.to_string()) })
-        .collect();
-    let query_values: Vec<String> = parsed
-        .query_pairs()
-        .filter_map(|(_, v)| if v.is_empty() { None } else { Some(v.to_string()) })
-        .collect();
+    let query_keys: Vec<String> = parsed.query_pairs().map(|(k, _)| k.to_string()).collect();
+    let query_values: Vec<String> = parsed.query_pairs().map(|(_, v)| v.to_string()).collect();
     let query_both: Vec<String> = parsed
         .query_pairs()
-        .filter_map(|(k, v)| if k.is_empty() { None } else { Some(format!("{k}={v}")) })
+        .map(|(k, v)| format!("{k}={v}"))
         .collect();
 
     let hostname = parsed.host_str().unwrap_or("").to_string();
     let rdn = etld_plus_one(&hostname);
-    let rurl = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or(""));
+    let host_with_port = host_authority(&parsed);
+    let rurl = format!("{}://{}", parsed.scheme(), host_with_port);
 
     for f in fields.split(',') {
         match f {
@@ -106,9 +101,21 @@ pub fn format_field(result: &Result, fields: &str) -> Vec<FieldValue> {
             "rurl" => values.push(FieldValue { field: "rurl".into(), value: rurl.clone() }),
             "qpath" => {
                 if !query_keys.is_empty() {
+                    // Reference crawler re-encodes and sorts the query
+                    // (url.Values.Encode): keys sorted, pairs re-encoded.
+                    let mut pairs: Vec<(String, String)> = parsed
+                        .query_pairs()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                    let query = pairs
+                        .iter()
+                        .map(|(k, v)| format!("{}={}", encode_query_component(k), encode_query_component(v)))
+                        .collect::<Vec<_>>()
+                        .join("&");
                     values.push(FieldValue {
                         field: "qpath".into(),
-                        value: format!("{}?{}", parsed.path(), parsed.query().unwrap_or("")),
+                        value: format!("{}?{}", parsed.path(), query),
                     });
                 }
             }
@@ -176,6 +183,21 @@ pub fn format_field(result: &Result, fields: &str) -> Vec<FieldValue> {
     values
 }
 
+/// Host including the explicit port when present
+/// (reference crawler `parsed.Host` keeps `:port`).
+fn host_authority(parsed: &Url) -> String {
+    match parsed.port() {
+        Some(port) => format!("{}:{}", parsed.host_str().unwrap_or(""), port),
+        None => parsed.host_str().unwrap_or("").to_string(),
+    }
+}
+
+/// Percent-encode a query component like Go's `url.Values.Encode`.
+fn encode_query_component(s: &str) -> String {
+    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+    utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
+}
+
 /// Return the base filename if the path contains a dotted file.
 fn file_base(path: &str) -> Option<String> {
     if path.is_empty() || path == "/" {
@@ -210,22 +232,13 @@ pub fn store_fields(result: &Result, fields: &str, dir: &str) {
         Ok(p) => p,
         Err(_) => return,
     };
-    let hostname = parsed.host_str().unwrap_or("");
-    let rurl = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or(""));
+    // Host directory keeps the port (reference crawler uses u.Host with
+    // `:` replaced by `_`).
+    let hostname = host_authority(&parsed).replace(':', "_");
 
     for fv in format_field(result, fields) {
-        append_to_field_file(dir, parsed.scheme(), hostname, &fv.field, &fv.value);
+        append_to_field_file(dir, parsed.scheme(), &hostname, &fv.field, &fv.value);
     }
-
-    // Custom fields always get stored when present in store_fields list.
-    for (name, values) in &request.custom_fields {
-        if fields.split(',').any(|f| f == name) {
-            for v in values {
-                append_to_field_file(dir, parsed.scheme(), hostname, name, v);
-            }
-        }
-    }
-    let _ = rurl;
 }
 
 fn append_to_field_file(dir: &str, scheme: &str, hostname: &str, field: &str, data: &str) {

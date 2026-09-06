@@ -8,8 +8,9 @@ use std::time::Duration;
 
 /// Port of the reference crawler `queue.Strategy` — crawl queue visit strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Strategy {
-    /// Breadth-first (FIFO) queue — crawl level by level.
+    /// Breadth-first queue — shallowest items are visited first (priority = depth).
     #[default]
     BreadthFirst,
     /// Depth-first (LIFO) stack — follow a path as deep as possible first.
@@ -36,12 +37,16 @@ impl Strategy {
 }
 
 /// Which known files (robots.txt / sitemap.xml) to crawl.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum KnownFiles {
+    #[serde(rename = "none")]
     #[default]
     None,
+    #[serde(rename = "all")]
     All,
+    #[serde(rename = "robotstxt")]
     RobotsTxt,
+    #[serde(rename = "sitemapxml")]
     SitemapXml,
 }
 
@@ -223,6 +228,8 @@ pub struct Options {
     pub xhr_extraction: bool,
     /// Max consecutive action failures before stopping (`-mfc`, default 10).
     pub max_failure_count: i32,
+    /// Maximum number of onclick links to process per page (`-ol`, default 10).
+    pub max_onclick_links: i32,
     /// Enable diagnostics (`-ed`).
     pub enable_diagnostics: bool,
     /// Page load strategy (heuristic, load, domcontentloaded, networkidle, none) (`-pls`).
@@ -333,6 +340,10 @@ pub struct Options {
     pub debug: bool,
     /// Show crawler version (`-version`).
     pub version: bool,
+    /// Update the crawler to the latest version (`-up`; no-op in the Rust build).
+    pub update: bool,
+    /// Disable the automatic update check (`-duc`).
+    pub disable_update_check: bool,
 
     // ---------------------------------------------------------- internal
     /// Compiled match regexes (from `output_match_regex`).
@@ -402,6 +413,7 @@ impl Clone for Options {
             chrome_ws_url: self.chrome_ws_url.clone(),
             xhr_extraction: self.xhr_extraction,
             max_failure_count: self.max_failure_count,
+            max_onclick_links: self.max_onclick_links,
             enable_diagnostics: self.enable_diagnostics,
             page_load_strategy: self.page_load_strategy,
             dom_wait_time: self.dom_wait_time,
@@ -453,6 +465,8 @@ impl Clone for Options {
             verbose: self.verbose,
             debug: self.debug,
             version: self.version,
+            update: self.update,
+            disable_update_check: self.disable_update_check,
             match_regex: self.match_regex.clone(),
             filter_regex: self.filter_regex.clone(),
             similarity_threshold: self.similarity_threshold,
@@ -484,6 +498,7 @@ impl Options {
             page_load_strategy: PageLoadStrategy::Heuristic,
             dom_wait_time: 5,
             max_failure_count: 10,
+            max_onclick_links: 10,
             filter_similar_threshold: 10,
             page_content_similar_mode: SimilarityMode::SimHash,
             page_content_similar_distance: 3,
@@ -524,16 +539,31 @@ impl Options {
         if self.headless && self.headless_hybrid {
             return Err("flags -hl (headless) and -hh (hybrid) are mutually exclusive".to_string());
         }
-        if !self.auth_credentials.is_empty() && !self.auth_credentials.contains(':') {
-            return Err("auth credentials must be in username:password format".to_string());
+        // Hybrid + automatic form fill: force-disabled in the reference crawler
+        // (form filling is handled via headless actions in the page context).
+        if self.headless_hybrid && self.automatic_form_fill {
+            self.automatic_form_fill = false;
+            log_info("Automatic form fill (-aff) has been disabled for headless navigation.");
         }
-        if self.auth_credentials.is_empty() && self.headless_optional_arguments.is_empty()
-            && !self.headless_no_sandbox
-            && self.system_chrome_path.is_empty()
-            && self.is_headless()
+        if !self.auth_credentials.is_empty() {
+            if !self.auth_credentials.contains(':') {
+                return Err("auth credentials must be in username:password format".to_string());
+            }
+            if !self.headless && !self.headless_hybrid {
+                self.headless = true;
+                log_info("Headless mode enabled automatically for authenticated crawling.");
+            }
+        }
+        if (!self.headless_optional_arguments.is_empty()
+            || self.headless_no_sandbox
+            || !self.system_chrome_path.is_empty())
+            && !self.headless
+            && !self.headless_hybrid
         {
-            // no-op: mirrors the reference crawler's inverse check which only errors when
-            // headless-only options are set without headless mode enabled.
+            return Err(
+                "headless (-hl) or hybrid (-hh) mode is required if -ho, -nos or -scp are set"
+                    .to_string(),
+            );
         }
         if !self.system_chrome_path.is_empty() && !std::path::Path::new(&self.system_chrome_path).exists() {
             return Err("specified system chrome binary does not exist".to_string());
@@ -551,18 +581,21 @@ impl Options {
                 .map_err(|e| format!("Invalid value for filter regex option: {e}"))?;
             self.filter_regex.push(compiled);
         }
-        if !self.known_files_eq(KnownFiles::None) && self.max_depth < 3 {
+        if self.known_files != KnownFiles::None && self.max_depth < 3 {
             self.max_depth = 3;
         }
         self.similarity_threshold = self.similarity_threshold();
         Ok(())
     }
+}
 
-    fn known_files_eq(&self, other: KnownFiles) -> bool {
-        matches!(self.known_files, KnownFiles::All | KnownFiles::RobotsTxt | KnownFiles::SitemapXml)
-            == matches!(other, KnownFiles::All | KnownFiles::RobotsTxt | KnownFiles::SitemapXml)
-            && !matches!(self.known_files, KnownFiles::None)
-    }
+/// Log an info line on native targets (no-op on wasm, where the output
+/// module is not built).
+pub fn log_info(msg: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::output::log(crate::output::LogLevel::Info, msg);
+    #[cfg(target_arch = "wasm32")]
+    let _ = msg;
 }
 
 /// Parse `Key: Value` header strings into a map (reference crawler `ParseCustomHeaders`).
@@ -574,6 +607,46 @@ pub fn parse_custom_headers(headers: &[String]) -> HashMap<String, String> {
         }
     }
     map
+}
+
+/// Parse a Go `time.Duration`-style string (`500ms`, `1h30m`, `30s`) plus the
+/// celestia-specific `d` day suffix (`2d`). Empty input means no limit.
+pub fn parse_go_duration(input: &str) -> Result<Duration, String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Ok(Duration::ZERO);
+    }
+    let mut total = Duration::ZERO;
+    let mut rest = input;
+    while !rest.is_empty() {
+        let digits = rest
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(rest.len());
+        if digits == 0 {
+            return Err(format!("invalid duration: {input}"));
+        }
+        let value: f64 = rest[..digits]
+            .parse()
+            .map_err(|_| format!("invalid duration: {input}"))?;
+        rest = &rest[digits..];
+        let unit_end = rest
+            .find(|c: char| c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        let unit = &rest[..unit_end];
+        rest = &rest[unit_end..];
+        let secs = match unit {
+            "ns" => value / 1e9,
+            "us" | "µs" => value / 1e6,
+            "ms" => value / 1e3,
+            "s" => value,
+            "m" => value * 60.0,
+            "h" => value * 3600.0,
+            "d" => value * 86_400.0,
+            _ => return Err(format!("invalid duration unit `{unit}` in: {input}")),
+        };
+        total += Duration::from_secs_f64(secs);
+    }
+    Ok(total)
 }
 
 /// Parse `--key=value` / bare `--key` chrome args into a map
@@ -630,6 +703,15 @@ mod tests {
     }
 
     #[test]
+    fn test_strategy_serde_matches_parse_strings() {
+        // UI configs (Tauri IPC JSON) pass the same strings the CLI uses.
+        let json = serde_json::to_string(&Strategy::BreadthFirst).unwrap();
+        assert_eq!(json, r#""breadth-first""#);
+        let back: Strategy = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, Strategy::BreadthFirst);
+    }
+
+    #[test]
     fn test_parse_custom_headers() {
         let m = parse_custom_headers(&["A: b".into(), "c:d".into()]);
         assert_eq!(m.get("A").unwrap(), "b");
@@ -669,5 +751,45 @@ mod tests {
         o.known_files = KnownFiles::All;
         o.validate().unwrap();
         assert_eq!(o.max_depth, 3);
+    }
+
+    #[test]
+    fn test_parse_go_duration() {
+        assert_eq!(parse_go_duration("30s").unwrap(), Duration::from_secs(30));
+        assert_eq!(parse_go_duration("1h30m").unwrap(), Duration::from_secs(5400));
+        assert_eq!(parse_go_duration("500ms").unwrap(), Duration::from_millis(500));
+        assert_eq!(parse_go_duration("2d").unwrap(), Duration::from_secs(172_800));
+        assert_eq!(parse_go_duration("").unwrap(), Duration::ZERO);
+        assert!(parse_go_duration("bogus").is_err());
+    }
+
+    #[test]
+    fn test_validate_headless_only_options_require_headless() {
+        let mut o = Options::with_defaults();
+        o.urls = vec!["https://example.com".into()];
+        o.headless_no_sandbox = true;
+        assert!(o.validate().is_err());
+
+        let mut o = Options::with_defaults();
+        o.headless_no_sandbox = true;
+        o.headless = true;
+        assert!(o.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_auth_enables_headless() {
+        let mut o = Options::with_defaults();
+        o.auth_credentials = "user:pass".into();
+        o.validate().unwrap();
+        assert!(o.headless);
+    }
+
+    #[test]
+    fn test_validate_hybrid_disables_form_fill() {
+        let mut o = Options::with_defaults();
+        o.headless_hybrid = true;
+        o.automatic_form_fill = true;
+        o.validate().unwrap();
+        assert!(!o.automatic_form_fill);
     }
 }

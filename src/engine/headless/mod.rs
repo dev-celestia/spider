@@ -11,20 +11,29 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
+use crate::control::CrawlControl;
 use crate::engine::common::{Crawler, PageFetch};
 use crate::output::{log, LogLevel, StandardWriter};
 use crate::stealth::{stealth_chrome_args, STEALTH_JS};
 use crate::types::options::{Options, PageLoadStrategy};
 use crate::types::result::{Headers, Request, Response};
+use crate::utils::formfill::{self, FormFillData};
 
 /// Headless Chrome fetcher (celestia headless engine).
 pub struct HeadlessFetcher {
     options: Arc<Options>,
+    /// Consecutive fetch failures for `-mfc` (max-failure-count).
+    consecutive_failures: std::sync::atomic::AtomicUsize,
+    control: Arc<CrawlControl>,
 }
 
 impl HeadlessFetcher {
-    pub fn new(options: Arc<Options>) -> std::result::Result<Self, String> {
-        Ok(HeadlessFetcher { options })
+    pub fn new(options: Arc<Options>, control: Arc<CrawlControl>) -> std::result::Result<Self, String> {
+        Ok(HeadlessFetcher {
+            options,
+            consecutive_failures: std::sync::atomic::AtomicUsize::new(0),
+            control,
+        })
     }
 
     /// Should XHR interception be installed for this request.
@@ -36,20 +45,47 @@ impl HeadlessFetcher {
 #[async_trait]
 impl PageFetch for HeadlessFetcher {
     async fn fetch(&self, request: &Request) -> std::result::Result<Response, String> {
+        // Stop the crawl after too many consecutive headless failures
+        // (reference crawler max-failure-count in the headless loop).
+        if self.options.max_failure_count > 0
+            && self.consecutive_failures.load(std::sync::atomic::Ordering::SeqCst)
+                >= self.options.max_failure_count as usize
+        {
+            log(
+                LogLevel::Warning,
+                &format!(
+                    "stopping crawl: max consecutive failures ({}) exceeded",
+                    self.options.max_failure_count
+                ),
+            );
+            self.control.cancel();
+            return Err("max failure count exceeded".into());
+        }
+
         let options = Arc::clone(&self.options);
         let request = request.clone();
         let xhr_enabled = self.xhr_enabled();
         let max_wait = Duration::from_secs(self.options.timeout.max(1) + 60);
 
-        // Launch/connect and render on a blocking thread (headless_chrome is sync).
+        // Render on a blocking thread (headless_chrome is sync).
         let render = tokio::task::spawn_blocking(move || {
             render_page(&options, &request, xhr_enabled)
         });
-        match tokio::time::timeout(max_wait, render).await {
+        let result = match tokio::time::timeout(max_wait, render).await {
             Ok(Ok(result)) => result,
             Ok(Err(join_err)) => Err(format!("render task failed: {join_err}")),
             Err(_) => Err("headless rendering timed out".into()),
+        };
+        match &result {
+            Ok(_) => self
+                .consecutive_failures
+                .store(0, std::sync::atomic::Ordering::SeqCst),
+            Err(_) => {
+                self.consecutive_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
         }
+        result
     }
 }
 
@@ -59,7 +95,46 @@ fn render_page(
     request: &Request,
     xhr_enabled: bool,
 ) -> std::result::Result<Response, String> {
-    let browser = launch_browser(options)?;
+    // Browser pool: reuse a running Chrome across requests
+    // (reference crawler `browserPool`); the browser returns to the pool
+    // when this render finishes.
+    let browser = match pop_pooled_browser() {
+        Some(b) => b,
+        None => launch_browser(options)?,
+    };
+    let render_result = render_with_browser(options, request, xhr_enabled, &browser);
+    push_pooled_browser(browser);
+    render_result
+}
+
+/// Max browsers kept alive in the pool (idle ones beyond this are closed).
+const BROWSER_POOL_MAX: usize = 8;
+
+/// Process-wide browser pool (reference crawler `rod.NewPool[BrowserPage]`).
+static BROWSER_POOL: std::sync::Mutex<Vec<headless_chrome::Browser>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn pop_pooled_browser() -> Option<headless_chrome::Browser> {
+    BROWSER_POOL.lock().ok()?.pop()
+}
+
+fn push_pooled_browser(browser: headless_chrome::Browser) {
+    if let Ok(mut pool) = BROWSER_POOL.lock() {
+        if pool.len() < BROWSER_POOL_MAX {
+            pool.push(browser);
+            return;
+        }
+    }
+    // Dropping the browser closes the Chrome process.
+    drop(browser);
+}
+
+fn render_with_browser(
+    options: &Options,
+    request: &Request,
+    xhr_enabled: bool,
+    browser: &headless_chrome::Browser,
+) -> std::result::Result<Response, String> {
     let tab = browser
         .new_tab()
         .map_err(|e| format!("failed to open new tab: {e}"))?;
@@ -117,16 +192,23 @@ fn render_page(
         }
     }
 
-    // Automatic form fill + submit (-aff).
+    // Automatic form fill + submit (-aff), using the form fill config data.
     if options.automatic_form_fill {
-        let fill_js = form_fill_js(&["*"]);
+        let fill_js = form_fill_js(&formfill_values_js(options));
         let _ = tab.evaluate(&fill_js, false);
         let _ = tab.evaluate("document.querySelectorAll('form')[0] && document.querySelectorAll('form')[0].requestSubmit ? document.querySelectorAll('form')[0].requestSubmit() : document.querySelectorAll('form')[0] && document.querySelectorAll('form')[0].submit()", false);
         let _ = tab.wait_until_navigated();
     }
 
-    // Stable wait after interactions.
-    std::thread::sleep(Duration::from_secs(options.time_stable.max(0)));
+    // Stable wait after interactions (reference crawler caps timeStable at
+    // timeout/2 for the hybrid engine).
+    let stable_cap = Duration::from_secs(options.timeout.max(1) / 2).max(Duration::from_secs(1));
+    let stable_wait = Duration::from_secs(options.time_stable.max(0)).min(stable_cap);
+    std::thread::sleep(stable_wait);
+
+    // Simulate clicks on onclick links capped by -ol (reference crawler
+    // hybrid crawl.go onclick simulation; native JS approximation).
+    let onclick_links = collect_onclick_links(&tab, options);
 
     // Collect XHR records captured by the hook (-xhr).
     let mut xhr_requests = Vec::new();
@@ -176,6 +258,7 @@ fn render_page(
         root_hostname: request.root_hostname.clone(),
         source: request.url.clone(),
         xhr_requests,
+        onclick_links,
         ..Default::default()
     })
 }
@@ -207,6 +290,12 @@ fn launch_browser(options: &Options) -> std::result::Result<headless_chrome::Bro
     }
     if options.headless_no_sandbox {
         chrome_args.push(OsStr::new("no-sandbox"));
+    }
+    // Proxy through the browser (-proxy; reference crawler sets --proxy-server).
+    let proxy_arg: String;
+    if !options.proxy.is_empty() {
+        proxy_arg = format!("proxy-server={}", options.proxy);
+        chrome_args.push(OsStr::new(&proxy_arg));
     }
 
     let path = if !options.system_chrome_path.is_empty() {
@@ -346,6 +435,68 @@ fn perform_login(tab: &Arc<headless_chrome::Tab>, user: &str, pass: &str) {
     let _ = tab.evaluate(&js, false);
 }
 
+/// Extract URLs from onclick handlers / javascript: links, capped by
+/// `-ol` (native approximation of the reference crawler's onclick click
+/// simulation in hybrid/crawl.go).
+fn collect_onclick_links(tab: &Arc<headless_chrome::Tab>, options: &Options) -> Vec<String> {
+    if options.max_onclick_links <= 0 {
+        return Vec::new();
+    }
+    let js = format!(
+        r#"
+(function(max) {{
+  var out = [];
+  var seen = {{}};
+  var re = /['"]((?:https?:\/\/|\/)[^'"]+)['"]/g;
+  var els = document.querySelectorAll('a[onclick], [onclick], a[href^="javascript:"]');
+  for (var i = 0; i < els.length && out.length < max; i++) {{
+    var text = (els[i].getAttribute('onclick') || '') + ' ' + (els[i].getAttribute('href') || '');
+    var m;
+    while ((m = re.exec(text)) !== null && out.length < max) {{
+      var u = m[1];
+      if (!seen[u]) {{ seen[u] = true; out.push(u); }}
+    }}
+  }}
+  return out;
+}})({max});
+"#,
+        max = options.max_onclick_links
+    );
+    let mut links = Vec::new();
+    if let Ok(result) = tab.evaluate(&js, false) {
+        if let Some(value) = result.value {
+            if let Some(arr) = value.as_array() {
+                for v in arr {
+                    if let Some(s) = v.as_str() {
+                        links.push(s.to_string());
+                    }
+                }
+            }
+        }
+    }
+    links
+}
+
+/// JSON object of input-type → fill value from the form fill data
+/// (reference crawler `-fc` FormFillSuggestions used by processForm).
+fn formfill_values_js(options: &Options) -> String {
+    let data = if options.form_config.is_empty() {
+        FormFillData::default()
+    } else {
+        formfill::load_form_config(&options.form_config).unwrap_or_default()
+    };
+    let object = serde_json::json!({
+        "email": data.email,
+        "password": data.password,
+        "tel": data.phone,
+        "color": data.color,
+        "text": data.placeholder,
+        "search": data.placeholder,
+        "placeholder": data.placeholder,
+    });
+    object.to_string()
+}
+
 /// Document-start XHR/fetch interception JS (celestia hijack hook).
 fn xhr_hook_js() -> String {
     r#"
@@ -375,34 +526,36 @@ window.__celestia_xhr = window.__celestia_xhr || [];
     .to_string()
 }
 
-/// JS that fills visible inputs using placeholder values (celestia -aff page step).
-fn form_fill_js(_selectors: &[&str]) -> String {
-    r#"
-(function() {
+/// JS that fills visible inputs using the provided values map
+/// (celestia -aff page step, driven by `-fc` form config data).
+fn form_fill_js(values_json: &str) -> String {
+    format!(
+        r#"
+(function() {{
+  var values = {values_json};
   var inputs = document.querySelectorAll('input:not([type=hidden]), textarea');
-  var values = {email: 'celestia@example.org', password: 'CelestiaP@assw0rd1', tel: '2124567890', color: '#e66465'};
-  inputs.forEach(function(i) {
+  inputs.forEach(function(i) {{
     if (i.value) return;
     var t = (i.type || 'text').toLowerCase();
-    if (values[t]) { i.value = values[t]; }
-    else if (i.placeholder) { i.value = i.placeholder; }
-    else { i.value = 'celestia'; }
-    i.dispatchEvent(new Event('input', {bubbles: true}));
-  });
-})();
+    if (values[t]) {{ i.value = values[t]; }}
+    else if (i.placeholder) {{ i.value = i.placeholder; }}
+    else {{ i.value = values.text || 'celestia'; }}
+    i.dispatchEvent(new Event('input', {{bubbles: true}}));
+  }});
+}})();
 "#
-    .to_string()
+    )
 }
 
 /// Build and run a headless-engine crawler for one seed.
 pub async fn crawl_headless(
     options: Arc<Options>,
     writer: Arc<StandardWriter>,
-    cancel: Arc<std::sync::atomic::AtomicBool>,
+    control: Arc<CrawlControl>,
     seed: &str,
 ) -> std::result::Result<Arc<Crawler>, String> {
-    let fetcher = Arc::new(HeadlessFetcher::new(Arc::clone(&options))?);
-    let crawler = Arc::new(Crawler::new(options, fetcher, writer, cancel)?);
+    let fetcher = Arc::new(HeadlessFetcher::new(Arc::clone(&options), control.clone())?);
+    let crawler = Arc::new(Crawler::new(options, fetcher, writer, control)?);
     crawler.crawl(seed).await?;
     Ok(crawler)
 }
@@ -429,6 +582,6 @@ mod tests {
     #[test]
     fn test_fetcher_new() {
         let o = Arc::new(Options::with_defaults());
-        assert!(HeadlessFetcher::new(o).is_ok());
+        assert!(HeadlessFetcher::new(o, Arc::new(CrawlControl::default())).is_ok());
     }
 }

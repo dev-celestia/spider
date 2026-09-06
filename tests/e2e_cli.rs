@@ -148,7 +148,8 @@ fn cli_output_file_written_and_no_clobber() {
     let content = std::fs::read_to_string(&file).expect("output file written");
     assert!(content.contains("/about"));
 
-    // no-clobber: second run writes to out-1.txt
+    // Second run: the output file truncates on every run (reference crawler
+    // os.Create semantics); -ncb applies only to store-response directories.
     let (code2, _, _) = run(
         &[
             "-u",
@@ -163,8 +164,13 @@ fn cli_output_file_written_and_no_clobber() {
         None,
     );
     assert_eq!(code2, 0);
-    let alt = dir.join("out-1.txt");
-    assert!(alt.exists(), "no-clobber alternate file created");
+    let content2 = std::fs::read_to_string(&file).expect("output file rewritten");
+    assert_eq!(
+        content2.matches("/about").count(),
+        1,
+        "output truncated between runs, not appended"
+    );
+    assert!(!dir.join("out-1.txt").exists());
     let _ = std::fs::remove_dir_all(&dir);
     server.0.shutdown();
 }

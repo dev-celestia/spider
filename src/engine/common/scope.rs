@@ -110,8 +110,13 @@ impl ScopeManager {
 
         let rdn = crate::output::fields::etld_plus_one(root_hostname);
         match self.field_scope {
-            // dn: any host containing the root domain keyword is in scope.
-            DnsScopeField::Dn => hostname.to_lowercase().contains(&rdn.to_lowercase()),
+            // dn: any host containing the domain-name keyword — the first
+            // label of the registrable domain ("example" for sub.example.com),
+            // NOT the full eTLD+1 (reference crawler getDomainRDNandRDN).
+            DnsScopeField::Dn => {
+                let dn = rdn.split('.').next().unwrap_or(&rdn).to_lowercase();
+                hostname.to_lowercase().contains(&dn)
+            }
             // rdn: the registrable domain itself or any of its subdomains,
             // requiring a label boundary (evilexample.com != example.com).
             DnsScopeField::Rdn => matches_domain_or_subdomain(hostname, &rdn),

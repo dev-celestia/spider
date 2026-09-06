@@ -32,7 +32,7 @@ struct Cli {
 
     // ------------------------------------------------------ configuration
     /// List of custom resolver (file or comma separated)
-    #[arg(long)]
+    #[arg(short = 'r', long)]
     resolvers: Vec<String>,
     /// Maximum depth to crawl (default 3)
     #[arg(short = 'd', long, default_value_t = 3)]
@@ -188,6 +188,9 @@ struct Cli {
     /// Automatic login with username:password (headless only)
     #[arg(long = "auto-login", default_value = "")]
     auto_login: String,
+    /// Maximum number of onclick links to process per page (default 10)
+    #[arg(long = "max-onclick-links", default_value_t = 10)]
+    max_onclick_links: i32,
 
     // ------------------------------------------------------------- scope
     /// In scope url regex to be followed by crawler
@@ -214,7 +217,7 @@ struct Cli {
     #[arg(long = "filter-regex")]
     filter_regex: Vec<String>,
     /// Field to display in output (Deprecated: use -output-template instead)
-    #[arg(long = "field", default_value = "")]
+    #[arg(short = 'f', long = "field", default_value = "")]
     field: String,
     /// Field to store in per-host output
     #[arg(long = "store-field", default_value = "")]
@@ -328,6 +331,12 @@ struct Cli {
     /// Display debug output
     #[arg(long)]
     debug: bool,
+    /// Update the crawler to the latest version (no-op in the Rust build)
+    #[arg(long)]
+    update: bool,
+    /// Disable automatic update check
+    #[arg(long = "disable-update-check")]
+    disable_update_check: bool,
     /// Do not print banner
     #[arg(long, hide = true)]
     _no_banner: bool,
@@ -344,8 +353,24 @@ fn main() {
     options.max_depth = cli.depth;
     options.scrape_js_responses = cli.js_crawl;
     options.scrape_jsluice_responses = cli.jsluice;
-    options.crawl_duration = parse_duration_arg(&cli.crawl_duration);
-    options.known_files = KnownFiles::parse(&cli.known_files).unwrap_or(KnownFiles::None);
+    options.crawl_duration = match parse_duration_arg(&cli.crawl_duration) {
+        Ok(d) => d,
+        Err(err) => {
+            eprintln!("error: {err}");
+            std::process::exit(1);
+        }
+    };
+    options.known_files = if cli.known_files.is_empty() {
+        KnownFiles::None
+    } else {
+        match KnownFiles::parse(&cli.known_files) {
+            Ok(k) => k,
+            Err(err) => {
+                eprintln!("error: {err}");
+                std::process::exit(1);
+            }
+        }
+    };
     options.body_read_size = cli.max_response_size;
     options.timeout = cli.timeout;
     options.time_stable = cli.time_stable;
@@ -356,9 +381,22 @@ fn main() {
     options.tech_detect = cli.tech_detect;
     options.custom_headers = parse_custom_headers(&resolve_file_inputs(&cli.headers));
     options.config_file = cli.config;
+    if !options.config_file.is_empty() {
+        let config_path = options.config_file.clone();
+        if let Err(err) = apply_config_file(&mut options, &config_path) {
+            eprintln!("error: could not read config file: {err}");
+            std::process::exit(1);
+        }
+    }
     options.form_config = cli.form_config;
     options.field_config = cli.field_config;
-    options.strategy = Strategy::parse(&cli.strategy).unwrap_or(Strategy::DepthFirst);
+    options.strategy = match Strategy::parse(&cli.strategy) {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!("error: {err}");
+            std::process::exit(1);
+        }
+    };
     options.ignore_query_params = cli.ignore_query_params;
     options.filter_similar = cli.filter_similar;
     options.filter_similar_threshold = cli.filter_similar_threshold;
@@ -385,9 +423,15 @@ fn main() {
     options.chrome_ws_url = cli.chrome_ws_url;
     options.xhr_extraction = cli.xhr_extraction;
     options.max_failure_count = cli.max_failure_count;
+    options.max_onclick_links = cli.max_onclick_links;
     options.enable_diagnostics = cli.enable_diagnostics;
-    options.page_load_strategy =
-        PageLoadStrategy::parse(&cli.page_load_strategy).unwrap_or(PageLoadStrategy::Heuristic);
+    options.page_load_strategy = match PageLoadStrategy::parse(&cli.page_load_strategy) {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("error: {err}");
+            std::process::exit(1);
+        }
+    };
     options.dom_wait_time = cli.dom_wait_time;
     options.captcha_solver_provider = cli
         .captcha_solver_provider
@@ -421,8 +465,13 @@ fn main() {
     options.disable_unique_filter = cli.disable_unique_filter;
     options.page_content_similar = cli.page_content_similar || cli.similarity_deduplication;
     options.similarity_deduplication = cli.similarity_deduplication;
-    options.page_content_similar_mode =
-        SimilarityMode::parse(&cli.page_content_similar_mode).unwrap_or(SimilarityMode::SimHash);
+    options.page_content_similar_mode = match SimilarityMode::parse(&cli.page_content_similar_mode) {
+        Ok(m) => m,
+        Err(err) => {
+            eprintln!("error: {err}");
+            std::process::exit(1);
+        }
+    };
     options.page_content_similar_distance = cli.page_content_similar_distance;
     options.page_content_similar_threshold = cli.page_content_similar_threshold;
     options.page_content_similar_budget = cli.page_content_similar_budget;
@@ -451,7 +500,38 @@ fn main() {
     options.debug = cli.debug;
     options.urls_from_stdin = options.urls.is_empty();
 
+    // Update check flags: self-update is a Go-ecosystem feature and is a no-op
+    // here; the -duc flag suppresses the check that would run in Go.
+    if cli.update {
+        eprintln!("[INF] self-update is not supported in the Rust build; rebuild with cargo instead");
+        std::process::exit(0);
+    }
+    if !cli.disable_update_check {
+        // Reference crawler performs a network version check here; the Rust
+        // build ships no update feed, so nothing to check (silent no-op).
+    }
+
     configure_output(&options);
+
+    // List output fields exits before the banner/runner (reference crawler
+    // handles -lof first in main).
+    if options.list_output_fields {
+        browser_crawler::output::list_output_fields();
+        std::process::exit(0);
+    }
+    if options.health_check {
+        browser_crawler::runner::health_check();
+        std::process::exit(0);
+    }
+
+    // Banner (reference crawler showBanner; suppressed by -silent / --no-banner).
+    if !options.silent && !cli._no_banner {
+        println!("celestia-browser v{} — fast crawler for automation pipelines", browser_crawler::runner::version());
+    }
+
+    // Cleanup: resume files older than 10 days are removed at startup
+    // (reference crawler cleanupOldResumeFiles).
+    browser_crawler::runner::cleanup_old_resume_files(10);
 
     let mut runner = match Runner::new(options) {
         Ok(r) => r,
@@ -483,32 +563,69 @@ fn main() {
             if summary.cancelled { " (cancelled)" } else { "" }
         );
     }
+
+    // Post-run housekeeping (reference crawler main.go): dedupe lines in the
+    // store-field dir and remove the resume file after a successful run.
+    browser_crawler::output::dedupe_lines_in_dir("celestia_field");
+    runner.remove_resume_file();
 }
 
-/// Parse a reference-crawler-style duration argument (`30s`, `5m`, `1h`, `2d`).
-pub fn parse_duration_arg(input: &str) -> Duration {
-    let input = input.trim();
-    if input.is_empty() {
-        return Duration::ZERO;
-    }
-    let (num, unit) = input.split_at(input.len().saturating_sub(1));
-    let value: u64 = match num.parse() {
-        Ok(v) => v,
-        Err(_) => {
-            // Try 2-char units ("ms") or plain seconds.
-            return input
-                .parse::<u64>()
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::ZERO);
+/// Parse a reference-crawler-style duration argument (`30s`, `5m`, `1h`,
+/// `1h30m`, `500ms`, `2d`) — see `parse_go_duration`.
+pub fn parse_duration_arg(input: &str) -> Result<Duration, String> {
+    browser_crawler::types::options::parse_go_duration(input)
+}
+
+/// Apply a `--config` file: simple `flag-name: value` lines (goflags-style
+/// config file), mapping flag names onto options. Unknown keys are ignored.
+fn apply_config_file(options: &mut Options, path: &str) -> Result<(), String> {
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("could not read {path}: {e}"))?;
+    let mut headers: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
         }
-    };
-    match unit {
-        "s" => Duration::from_secs(value),
-        "m" => Duration::from_secs(value * 60),
-        "h" => Duration::from_secs(value * 3600),
-        "d" => Duration::from_secs(value * 86_400),
-        _ => Duration::from_secs(value),
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim().trim_matches('"');
+        let value = value.trim().trim_matches('"').to_string();
+        match key {
+            "depth" | "d" => options.max_depth = value.parse().unwrap_or(options.max_depth),
+            "concurrency" | "c" => options.concurrency = value.parse().unwrap_or(options.concurrency),
+            "parallelism" | "p" => options.parallelism = value.parse().unwrap_or(options.parallelism),
+            "timeout" => options.timeout = value.parse().unwrap_or(options.timeout),
+            "retry" => options.retries = value.parse().unwrap_or(options.retries),
+            "rate-limit" => options.rate_limit = value.parse().unwrap_or(options.rate_limit),
+            "delay" => options.delay = value.parse().unwrap_or(options.delay),
+            "proxy" => options.proxy = value,
+            "output" | "o" => options.output_file = value,
+            "field-scope" => options.field_scope = value,
+            "strategy" | "s" => {
+                if let Ok(s) = Strategy::parse(&value) {
+                    options.strategy = s;
+                }
+            }
+            "headers" | "H" => headers.push(value),
+            "known-files" => {
+                if let Ok(k) = KnownFiles::parse(&value) {
+                    options.known_files = k;
+                }
+            }
+            "js-crawl" => options.scrape_js_responses = value == "true",
+            "jsonl" | "j" => options.json = value == "true",
+            "silent" => options.silent = value == "true",
+            "verbose" => options.verbose = value == "true",
+            "no-color" => options.no_colors = value == "true",
+            _ => {}
+        }
     }
+    for (k, v) in parse_custom_headers(&headers) {
+        options.custom_headers.insert(k, v);
+    }
+    Ok(())
 }
 
 /// Resolve `-H`/`-cs` style inputs: if the value is a file path, read one
@@ -544,11 +661,14 @@ mod tests {
 
     #[test]
     fn test_parse_duration_arg() {
-        assert_eq!(parse_duration_arg("30s"), Duration::from_secs(30));
-        assert_eq!(parse_duration_arg("5m"), Duration::from_secs(300));
-        assert_eq!(parse_duration_arg("1h"), Duration::from_secs(3600));
-        assert_eq!(parse_duration_arg("2d"), Duration::from_secs(172_800));
-        assert_eq!(parse_duration_arg(""), Duration::ZERO);
+        assert_eq!(parse_duration_arg("30s").unwrap(), Duration::from_secs(30));
+        assert_eq!(parse_duration_arg("5m").unwrap(), Duration::from_secs(300));
+        assert_eq!(parse_duration_arg("1h").unwrap(), Duration::from_secs(3600));
+        assert_eq!(parse_duration_arg("2d").unwrap(), Duration::from_secs(172_800));
+        assert_eq!(parse_duration_arg("1h30m").unwrap(), Duration::from_secs(5400));
+        assert_eq!(parse_duration_arg("500ms").unwrap(), Duration::from_millis(500));
+        assert_eq!(parse_duration_arg("").unwrap(), Duration::ZERO);
+        assert!(parse_duration_arg("bogus").is_err());
     }
 
     #[test]

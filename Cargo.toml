@@ -3,20 +3,29 @@ name = "browser-crawler"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
-tokio = { version = "1.43", features = ["full"] }
-reqwest = { version = "0.12", features = ["default-tls", "json"] }
 scraper = "0.22"
 url = "2.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dashmap = "6.1"
 async-trait = "0.1"
-headless_chrome = "1.0"
-clap = { version = "4.5", features = ["derive", "string"] }
 regex = "1"
-serde_yaml = "0.9"
 psl = "2"
 md-5 = "0.10"
-futures = "0.3"
 percent-encoding = "2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1.43", features = ["full"] }
+reqwest = { version = "0.12", features = ["default-tls", "json", "cookies"] }
+headless_chrome = "1.0"
+clap = { version = "4.5", features = ["derive", "string"] }
+serde_yaml = "0.9"
+futures = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"

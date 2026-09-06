@@ -4,20 +4,27 @@
 
 use std::collections::HashSet;
 
-/// 64-bit SimHash of text content (reference crawler `simhash.Simhash`).
+/// 64-bit SimHash of text content (reference crawler `simhash.Simhash` over
+/// 3-word shingles of extracted HTML text, `normalize.go`).
 pub struct SimHash;
 
+/// Minimum tokens required before a shingle fingerprint is computed
+/// (reference crawler `normalize.go` gate).
+const MIN_TOKENS: usize = 5;
+
 impl SimHash {
-    /// Compute the simhash: word tokens are hashed (FNV-1a 64) and accumulated
-    /// by sign into a 64-bit fingerprint.
+    /// Compute the simhash: 3-word shingles of the extracted text are hashed
+    /// (FNV-1a 64) and accumulated by sign into a 64-bit fingerprint with
+    /// term-count weighting.
     pub fn hash(text: &str) -> u64 {
-        let tokens = normalize_tokens(text);
-        let mut v = [0i64; 64];
-        if tokens.is_empty() {
+        let tokens = normalize_tokens(&extract_visible_text(text));
+        if tokens.len() < MIN_TOKENS {
             return 0;
         }
-        for token in &tokens {
-            let h = fnv1a_64(token.as_bytes());
+        let mut v = [0i64; 64];
+        for window in tokens.windows(3) {
+            let shingle = window.join(" ");
+            let h = fnv1a_64(shingle.as_bytes());
             for bit in 0..64 {
                 if h & (1u64 << bit) != 0 {
                     v[bit] += 1;
@@ -39,6 +46,35 @@ impl SimHash {
     pub fn hamming_distance(a: u64, b: u64) -> u32 {
         (a ^ b).count_ones()
     }
+}
+
+/// Strip HTML tags and script/style blocks so similarity is computed over the
+/// visible text (reference crawler `normalize.go` HTML extraction).
+pub fn extract_visible_text(html: &str) -> String {
+    let lower = html.to_lowercase();
+    let mut out = html.to_string();
+    for tag in ["script", "style", "nav", "footer", "header"] {
+        let open = format!("<{tag}");
+        let close = format!("</{tag}>");
+        while let Some(start) = lower.find(&open) {
+            let Some(end) = lower[start..].find(&close) else { break };
+            let abs_end = start + end + close.len();
+            out.replace_range(start..abs_end.min(out.len()), " ");
+            return extract_visible_text(&out);
+        }
+    }
+    // Drop remaining tags and decode a few common entities.
+    let mut plain = String::with_capacity(out.len());
+    let mut in_tag = false;
+    for c in out.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => plain.push(c),
+            _ => {}
+        }
+    }
+    plain
 }
 
 /// Jaccard similarity between two texts over normalized token sets — used as
