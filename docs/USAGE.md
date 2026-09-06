@@ -151,6 +151,34 @@ assert!(ir.markdown_ir.contains("# Hello"));
 
 ---
 
+### `SiteMapper::map_site`
+
+```rust
+pub async fn map_site(&self, start_url: &str) -> Option<SitemapNode>
+```
+
+#### Detailed Function Explanation
+
+Builds a structural map of a website as a `SitemapNode` tree by traversing it **depth-first** (recursive): starting from `start_url`, every same-host link is followed to its maximum depth before backtracking. A link reachable from multiple parents appears only once — under the first DFS path that reaches it. Returns `None` if the initial request fails.
+
+Configure via the builder: `SiteMapper::builder().max_depth(n).max_pages(m).render_options(..).build()`. `max_pages` (`0` = unlimited) caps total fetches as a safety net for large sites; `max_depth` defaults to `2`.
+
+#### Example Usage
+
+```rust
+use browser_crawler::SiteMapper;
+
+#[tokio::main]
+async fn main() {
+    let mapper = SiteMapper::builder().max_depth(2).max_pages(100).build();
+    if let Some(tree) = mapper.map_site("https://example.com").await {
+        println!("{}", serde_json::to_string_pretty(&tree).unwrap());
+    }
+}
+```
+
+---
+
 ### `Browser::fetch_page`
 
 ```rust

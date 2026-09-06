@@ -1,75 +1,64 @@
-# React + TypeScript + Vite
+# Celestia Playground
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+An interactive browser app for exercising the WebAssembly build of
+[`browser-crawler`](../): paste HTML or fetch a URL and inspect the generated
+**Markdown IR**, **links**, **forms**, and **JS endpoints** — all parsed locally
+in WASM by the same Rust code paths the native crawler uses.
 
-Currently, two official plugins are available:
+## Quick start
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+pnpm install
+pnpm dev          # http://localhost:5173
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+Rebuilding the WASM module after changing the Rust crate:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+pnpm build:wasm   # wasm-pack build --target web -> src/wasm/
 ```
+
+The compiled module is committed under `src/wasm/`, so you only need a Rust
+toolchain when the crate changes.
+
+## App views
+
+- **Playground** — two input modes (**Fetch URL** through a dev-only `/api/fetch`
+  CORS proxy, or **Paste HTML** with a base URL) and five result tabs
+  (Markdown IR, Links, Forms, JS endpoints, Raw JSON).
+- **Docs** — complete in-app documentation of the `browser-crawler` **Rust library and
+  CLI**: engines, scope & filters, rate limiting, headless rendering & stealth, JS
+  crawling / forms / auth, output formats, the library API (`Runner`,
+  `Browser::builder()`, `CrawlSession`), and the WASM core. Pages live as markdown
+  under `src/docs/pages/` and are bundled into the app.
+
+## Scripts
+
+| Script | What it does |
+|--------|--------------|
+| `dev` | Vite dev server with HMR and the dev-only `/api/fetch` proxy |
+| `build` | Typecheck (`tsc -b`) + production bundle into `dist/` |
+| `preview` | Serve the production build locally |
+| `lint` | ESLint |
+| `build:wasm` | Rebuild the WASM bindings into `src/wasm/` |
+
+> The production bundle has no `/api/fetch` proxy — reverse-proxy it yourself for
+> **Fetch URL** mode to work in a deployment. **Paste HTML** mode works anywhere.
+
+## GitHub Pages
+
+The site auto-deploys on every push to `master` that touches `playground/**`
+via [`.github/workflows/deploy-playground.yml`](../.github/workflows/deploy-playground.yml)
+(there's also a manual **workflow_dispatch** trigger). The first time it runs,
+enable Pages in the repo under **Settings → Pages → Source: GitHub Actions**.
+
+The workflow builds with `VITE_PUBLIC_BASE=/<repo>/` so assets resolve under the
+project-site subpath. To build a Pages-style bundle locally:
+
+```bash
+VITE_PUBLIC_BASE=/browser-crawler/ pnpm build && pnpm preview
+```
+
+Full documentation of the Rust library (setup, engines, filters, output, library
+API, troubleshooting pointers) is built into the app — run `pnpm dev` and open the
+**Docs** view.

@@ -95,6 +95,7 @@ echo "https://example.com" | celestia -d 3
 | `--ignore-query-params` | off | Treat `/page?a=1` and `/page?a=2` as the same URL. |
 | `--max-domain-pages` | `0` | Cap pages crawled per domain (0 = unlimited). |
 | `--path-climb` | off | Also crawl parent paths of discovered URLs (`/a/b/c` → `/a/`, `/a/b/`). |
+| `--sitemap-tree` | off | Skip the crawl engine and build a DFS sitemap link tree from each `-u` target instead, emitting `SitemapNode` JSON (a single root object for one URL, an array for several). Honors `--depth` (tree depth) and `--headless` (dynamic rendering); use `-o` to write the JSON to a file. |
 | `--config` | — | Celestia configuration file (accepted for compatibility). |
 
 ## 4. Scope

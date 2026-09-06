@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import DocsView from './DocsView'
 import init, {
   extract_all_links,
   extract_forms,
@@ -31,6 +32,7 @@ interface Analysis {
 
 type SourceMode = 'url' | 'html'
 type ResultTab = 'markdown' | 'links' | 'forms' | 'endpoints' | 'json'
+type View = 'playground' | 'docs'
 
 const HOME = 'https://example.com'
 
@@ -73,6 +75,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [tab, setTab] = useState<ResultTab>('markdown')
+  const [view, setView] = useState<View>('playground')
 
   useEffect(() => {
     init()
@@ -114,18 +117,41 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={view === 'docs' ? 'app wide' : 'app'}>
       <header className="header">
         <div>
           <h1>Celestia Playground</h1>
           <p className="subtitle">
-            browser-crawler compiled to WebAssembly — turn pages into markdown IR, links, forms,
-            and JS endpoints, entirely in your browser.
+            Documentation for the browser-crawler Rust library &amp; CLI — crawl engines, scope
+            &amp; filters, headless rendering, output, and the library API. The Playground view
+            exercises the same parsing core compiled to WebAssembly.
           </p>
         </div>
-        <StatusBadge state={wasmState} />
+        <div className="header-side">
+          <nav className="view-switch" aria-label="App views">
+            <button
+              className={view === 'playground' ? 'active' : ''}
+              aria-current={view === 'playground' ? 'page' : undefined}
+              onClick={() => setView('playground')}
+            >
+              Playground
+            </button>
+            <button
+              className={view === 'docs' ? 'active' : ''}
+              aria-current={view === 'docs' ? 'page' : undefined}
+              onClick={() => setView('docs')}
+            >
+              Docs
+            </button>
+          </nav>
+          <StatusBadge state={wasmState} />
+        </div>
       </header>
 
+      {view === 'docs' ? (
+        <DocsView />
+      ) : (
+        <>
       <section className="card">
         <div className="segmented" role="tablist" aria-label="input source">
           <button
@@ -330,6 +356,8 @@ export default function App() {
         Fetching goes through a dev-only proxy (<code>/api/fetch</code>) to bypass CORS; everything
         else — parsing, IR generation, link &amp; form extraction — runs in WebAssembly locally.
       </footer>
+        </>
+      )}
     </div>
   )
 }

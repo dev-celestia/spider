@@ -47,5 +47,8 @@ function devFetchProxy(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Set VITE_PUBLIC_BASE when deploying to a subpath (e.g. GitHub Pages
+  // project sites live at /<repo-name>/).
+  base: process.env.VITE_PUBLIC_BASE || '/',
   plugins: [react(), devFetchProxy()],
 })

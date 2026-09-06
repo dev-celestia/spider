@@ -1,7 +1,13 @@
 [package]
 name = "browser-crawler"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+description = "A concurrent browser-aware web crawler for Rust with a WASM-compatible core."
+license = "MIT"
+repository = "https://github.com/dev-celestia/browser-crawler"
+readme = "README.md"
+keywords = ["crawler", "scraper", "web", "wasm", "async"]
+categories = ["web-programming", "web-programming::http-client"]
 
 [lib]
 crate-type = ["rlib", "cdylib"]

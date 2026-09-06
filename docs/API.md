@@ -87,6 +87,20 @@ pub fn transform_html_to_ir(url: &str, html: &str) -> PageIR
 
 **Description:** Converts raw HTML source into a clean Markdown [`PageIR`] representation by pruning scripts, styles, and wrapper noise.
 
+#### `SiteMapper`
+
+```rust
+pub struct SiteMapper { /* ... */ }
+```
+
+**Description:** Rapid sitemap mapper for Phase 1 link discovery. Traverses a site **depth-first** (recursive), building a [`SitemapNode`](#sitemapnode) tree; a link reachable from multiple parents appears only once under the first DFS path that reaches it.
+
+```rust
+// Builder: max_depth (default 2), max_pages (0 = unlimited), user_agent, render_options
+let mapper = SiteMapper::builder().max_depth(2).max_pages(100).build();
+let root: Option<SitemapNode> = mapper.map_site("https://example.com").await;
+```
+
 ---
 
 ### Data Models & Enums
@@ -110,6 +124,18 @@ pub struct CrawlSummary {
     pub visited_urls: Vec<String>,
 }
 ```
+
+#### `SitemapNode`
+
+```rust
+pub struct SitemapNode {
+    pub url: String,
+    pub depth: usize,
+    pub children: Vec<SitemapNode>,
+}
+```
+
+**Description:** Structural map of a website as a tree node graph, produced by [`SiteMapper`](#sitemapper).
 
 #### `RenderMode`
 

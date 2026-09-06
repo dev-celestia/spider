@@ -88,6 +88,9 @@ struct Cli {
     /// Visit strategy (depth-first, breadth-first) (default depth-first)
     #[arg(short = 's', long, default_value = "depth-first")]
     strategy: String,
+    /// Build a DFS sitemap link tree (JSON) instead of crawling for results
+    #[arg(long = "sitemap-tree")]
+    sitemap_tree: bool,
     /// Ignore crawling same path with different query-param values
     #[arg(long = "ignore-query-params")]
     ignore_query_params: bool,
@@ -345,6 +348,13 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
+    // Sitemap-tree mode: DFS link tree via SiteMapper instead of the crawl
+    // engine. Runs before options mapping so `cli` fields are still owned.
+    if cli.sitemap_tree {
+        run_sitemap_tree(&cli);
+        std::process::exit(0);
+    }
+
     let mut options = Options::with_defaults();
     options.urls = cli.urls;
     options.resume = cli.resume;
@@ -568,6 +578,70 @@ fn main() {
     // store-field dir and remove the resume file after a successful run.
     browser_crawler::output::dedupe_lines_in_dir("celestia_field");
     runner.remove_resume_file();
+}
+
+/// Run the DFS sitemap-tree mode: fetch each `-u` target with `SiteMapper`,
+/// following same-host links depth-first, and emit the resulting
+/// `SitemapNode` tree as JSON (array of roots when multiple URLs are given).
+fn run_sitemap_tree(cli: &Cli) {
+    use browser_crawler::mapper::SiteMapper;
+    use browser_crawler::types::{RenderMode, RenderOptions};
+
+    if cli.urls.is_empty() {
+        eprintln!("error: --sitemap-tree requires at least one target url (-u)");
+        std::process::exit(1);
+    }
+
+    let render_options = if cli.headless {
+        RenderOptions {
+            render_mode: RenderMode::Dynamic,
+            ..RenderOptions::default()
+        }
+    } else {
+        RenderOptions::default()
+    };
+
+    let mapper = SiteMapper::builder()
+        .max_depth(cli.depth.max(0) as usize)
+        .render_options(render_options)
+        .build();
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime");
+
+    let roots: Vec<browser_crawler::types::SitemapNode> = runtime.block_on(async {
+        let mut roots = Vec::new();
+        for url in &cli.urls {
+            match mapper.map_site(url).await {
+                Some(node) => roots.push(node),
+                None => eprintln!("[WRN] failed to map {url}"),
+            }
+        }
+        roots
+    });
+
+    if !cli.silent {
+        eprintln!(
+            "[INF] sitemap: {} root(s), {} pages fetched",
+            roots.len(),
+            mapper.pages_fetched()
+        );
+    }
+
+    let json = if roots.len() == 1 {
+        serde_json::to_string_pretty(&roots[0]).expect("serialize sitemap tree")
+    } else {
+        serde_json::to_string_pretty(&roots).expect("serialize sitemap tree")
+    };
+
+    if cli.output.is_empty() {
+        println!("{json}");
+    } else if let Err(err) = std::fs::write(&cli.output, format!("{json}\n")) {
+        eprintln!("error: could not write {}: {err}", cli.output);
+        std::process::exit(1);
+    }
 }
 
 /// Parse a reference-crawler-style duration argument (`30s`, `5m`, `1h`,
