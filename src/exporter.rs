@@ -45,7 +45,7 @@ impl FileStorageExporter {
     ///
     /// # Examples
     /// ```
-    /// use browser_crawler::FileStorageExporter;
+    /// use celestia_spider::FileStorageExporter;
     ///
     /// let custom_exporter = FileStorageExporter::new("./custom_output");
     /// ```
@@ -66,7 +66,7 @@ impl Default for FileStorageExporter {
     ///
     /// # Examples
     /// ```
-    /// use browser_crawler::FileStorageExporter;
+    /// use celestia_spider::FileStorageExporter;
     ///
     /// let default_exporter = FileStorageExporter::default();
     /// assert_eq!(default_exporter.output_dir().to_str().unwrap(), "out");

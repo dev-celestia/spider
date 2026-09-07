@@ -5,11 +5,11 @@ mod common;
 
 use std::sync::{Arc, Mutex};
 
-use browser_crawler::control::CrawlControl;
-use browser_crawler::engine::common::{Crawler, PageFetch};
-use browser_crawler::engine::standard::StandardFetcher;
-use browser_crawler::output::StandardWriter;
-use browser_crawler::types::options::Options;
+use celestia_spider::control::CrawlControl;
+use celestia_spider::engine::common::{Crawler, PageFetch};
+use celestia_spider::engine::standard::StandardFetcher;
+use celestia_spider::output::StandardWriter;
+use celestia_spider::types::options::Options;
 
 use common::{crawl_options, spawn, standard_site};
 
@@ -181,7 +181,7 @@ async fn e2e_filter_similar_collapses_variable_paths() {
 async fn e2e_known_files_crawl_robots_and_sitemap() {
     let server = spawn(standard_site(None)).await;
     let mut options = crawl_options(&server.base_url);
-    options.known_files = browser_crawler::types::options::KnownFiles::All;
+    options.known_files = celestia_spider::types::options::KnownFiles::All;
     let (_, results) = crawl_and_collect(&options).await;
 
     let urls = results.lock().unwrap();
@@ -414,7 +414,7 @@ async fn e2e_crawl_duration_stops_crawl() {
 async fn e2e_strategy_breadth_first_visits_level_order() {
     let server = spawn(standard_site(None)).await;
     let mut options = crawl_options(&server.base_url);
-    options.strategy = browser_crawler::types::options::Strategy::BreadthFirst;
+    options.strategy = celestia_spider::types::options::Strategy::BreadthFirst;
     options.max_depth = 1;
     let (crawler, _) = crawl_and_collect(&options).await;
 

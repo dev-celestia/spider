@@ -190,7 +190,7 @@ pub fn transform_html_to_ir(url: &str, html: &str) -> PageIR {
 /// # Examples
 ///
 /// ```rust
-/// use browser_crawler::extract_links;
+/// use celestia_spider::extract_links;
 ///
 /// let html = r#"
 ///     <a href="/about">About Us</a>
@@ -317,6 +317,5 @@ mod tests {
         );
     }
 }
-
 
 

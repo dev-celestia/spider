@@ -27,7 +27,7 @@ impl Browser {
     ///
     /// # Examples
     /// ```
-    /// use browser_crawler::Browser;
+    /// use celestia_spider::Browser;
     ///
     /// let builder = Browser::builder();
     /// ```
@@ -80,7 +80,7 @@ impl Browser {
     ///
     /// # Examples
     /// ```rust,no_run
-    /// use browser_crawler::Browser;
+    /// use celestia_spider::Browser;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<(), String> {

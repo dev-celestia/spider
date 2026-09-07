@@ -214,8 +214,8 @@ pub fn standard_site(external_link: Option<&str>) -> HashMap<String, Route> {
 }
 
 /// Convenience: build default crawl options pointed at `base_url`.
-pub fn crawl_options(base: &str) -> browser_crawler::Options {
-    let mut o = browser_crawler::Options::with_defaults();
+pub fn crawl_options(base: &str) -> celestia_spider::Options {
+    let mut o = celestia_spider::Options::with_defaults();
     o.urls = vec![format!("{}/", base)];
     o.concurrency = 4;
     o.parallelism = 2;

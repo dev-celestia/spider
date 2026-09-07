@@ -126,30 +126,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "browser-crawler"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "clap",
- "dashmap",
- "futures",
- "headless_chrome",
- "md-5",
- "percent-encoding",
- "psl",
- "regex",
- "reqwest",
- "scraper",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "serde_yaml",
- "tokio",
- "url",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -175,6 +151,30 @@ checksum = "c89588d05638b5b4594a3348a2d6c20277e43a7f5c5202b05cc56888475a47b8"
 dependencies = [
  "find-msvc-tools",
  "shlex",
+]
+
+[[package]]
+name = "celestia-spider"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "dashmap",
+ "futures",
+ "headless_chrome",
+ "md-5",
+ "percent-encoding",
+ "psl",
+ "regex",
+ "reqwest",
+ "scraper",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "url",
+ "wasm-bindgen",
 ]
 
 [[package]]

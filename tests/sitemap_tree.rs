@@ -5,7 +5,7 @@
 mod common;
 
 use common::{spawn, standard_site};
-use browser_crawler::types::SitemapNode;
+use celestia_spider::types::SitemapNode;
 
 /// Collect all URLs in the tree (pre-order DFS).
 fn collect_urls(node: &SitemapNode, out: &mut Vec<String>) {
@@ -22,7 +22,7 @@ fn find_child<'a>(node: &'a SitemapNode, suffix: &str) -> Option<&'a SitemapNode
 #[tokio::test]
 async fn dfs_tree_shape_and_depths() {
     let server = spawn(standard_site(None)).await;
-    let mapper = browser_crawler::mapper::SiteMapper::builder().max_depth(2).build();
+    let mapper = celestia_spider::mapper::SiteMapper::builder().max_depth(2).build();
 
     let root = mapper
         .map_site(&format!("{}/", server.base_url))
@@ -55,7 +55,7 @@ async fn dfs_tree_shape_and_depths() {
 #[tokio::test]
 async fn cross_page_dedup_appears_once() {
     let server = spawn(standard_site(None)).await;
-    let mapper = browser_crawler::mapper::SiteMapper::builder().max_depth(2).build();
+    let mapper = celestia_spider::mapper::SiteMapper::builder().max_depth(2).build();
 
     let root = mapper
         .map_site(&format!("{}/", server.base_url))
@@ -79,7 +79,7 @@ async fn cross_page_dedup_appears_once() {
 #[tokio::test]
 async fn max_depth_cutoff() {
     let server = spawn(standard_site(None)).await;
-    let mapper = browser_crawler::mapper::SiteMapper::builder().max_depth(1).build();
+    let mapper = celestia_spider::mapper::SiteMapper::builder().max_depth(1).build();
 
     let root = mapper
         .map_site(&format!("{}/", server.base_url))
@@ -99,7 +99,7 @@ async fn max_depth_cutoff() {
 #[tokio::test]
 async fn max_pages_cap_truncates() {
     let server = spawn(standard_site(None)).await;
-    let mapper = browser_crawler::mapper::SiteMapper::builder()
+    let mapper = celestia_spider::mapper::SiteMapper::builder()
         .max_depth(2)
         .max_pages(3)
         .build();
@@ -121,7 +121,7 @@ async fn max_pages_cap_truncates() {
 #[tokio::test]
 async fn unreachable_root_returns_none() {
     // Port 1 on loopback refuses connections => the root fetch fails.
-    let mapper = browser_crawler::mapper::SiteMapper::new(1);
+    let mapper = celestia_spider::mapper::SiteMapper::new(1);
 
     let result = mapper.map_site("http://127.0.0.1:1/").await;
     assert!(result.is_none(), "unreachable root yields no node");

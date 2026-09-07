@@ -23,11 +23,11 @@ use crate::types::options::Options;
 pub type InFlightUrls = Arc<Mutex<HashSet<String>>>;
 
 /// Default directory for auto-generated resume files (reference crawler
-/// uses `~/.config/katana`; the Rust port uses `~/.config/celestia-browser`).
+/// uses `~/.config/katana`; the Rust port uses `~/.config/celestia-spider`).
 fn default_resume_dir() -> Option<std::path::PathBuf> {
     std::env::home_dir()
         .or_else(|| std::env::var("HOME").ok().map(std::path::PathBuf::from))
-        .map(|h| h.join(".config").join("celestia-browser"))
+        .map(|h| h.join(".config").join("celestia-spider"))
 }
 
 /// Auto-generated resume file path used when the crawl is interrupted.

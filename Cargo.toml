@@ -1,16 +1,24 @@
 [package]
-name = "browser-crawler"
+name = "celestia-spider"
 version = "0.2.0"
 edition = "2024"
-description = "A concurrent browser-aware web crawler for Rust with a WASM-compatible core."
+rust-version = "1.85"
+description = "A concurrent browser-aware web crawler with standard, headless, hybrid, and WASM-compatible engines."
 license = "MIT"
 repository = "https://github.com/dev-celestia/browser-crawler"
+homepage = "https://github.com/dev-celestia/browser-crawler"
+documentation = "https://docs.rs/celestia-spider"
 readme = "README.md"
 keywords = ["crawler", "scraper", "web", "wasm", "async"]
 categories = ["web-programming", "web-programming::http-client"]
+include = ["/src/**", "/tests/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE"]
 
 [lib]
 crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "celestia-spider"
+path = "src/bin/celestia-spider.rs"
 
 [dependencies]
 scraper = "0.22"

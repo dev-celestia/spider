@@ -1,4 +1,4 @@
-//! # browser-crawler
+//! # celestia-spider
 //! 
 //! A high-performance Rust web browsing library and AI Intermediate Representation (IR) generator.
 //! Built around a streaming builder architecture (`Browser::builder()`) with support for static HTTP fetching,
@@ -14,7 +14,7 @@
 //! 
 //! ```rust,no_run
 //! use std::time::Duration;
-//! use browser_crawler::{Browser, RenderMode, WaitUntil, TimeoutStrategy};
+//! use celestia_spider::{Browser, RenderMode, WaitUntil, TimeoutStrategy};
 //! 
 //! #[tokio::main]
 //! async fn main() -> Result<(), String> {
@@ -40,7 +40,7 @@
 //! ## Single Page Crawl Utility Example
 //!
 //! ```rust,no_run
-//! use browser_crawler::{crawl_single_page, RenderOptions, RenderMode};
+//! use celestia_spider::{crawl_single_page, RenderOptions, RenderMode};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), String> {
@@ -62,7 +62,7 @@
 //! [`crate::CrawlSessionHandle`] with `cancel` / `pause` / `resume` / `join`.
 //!
 //! ```rust,no_run
-//! use browser_crawler::{CrawlConfig, CrawlSession, CrawlerEvent};
+//! use celestia_spider::{CrawlConfig, CrawlSession, CrawlerEvent};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), String> {

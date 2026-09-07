@@ -1,21 +1,21 @@
-//! The `celestia-browser` CLI binary — flag-for-flag port of the reference project's CLI entry point
+//! The `celestia-spider` CLI binary, driving the Rust crawl engine.
 //! driving the Rust crawl engine.
 
 use std::time::Duration;
 
 use clap::Parser;
 
-use browser_crawler::output::configure_output;
-use browser_crawler::runner::Runner;
-use browser_crawler::types::options::{
+use celestia_spider::output::configure_output;
+use celestia_spider::runner::Runner;
+use celestia_spider::types::options::{
     parse_custom_headers, KnownFiles, Options, PageLoadStrategy, SimilarityMode, Strategy,
 };
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "celestia-browser",
-    version = browser_crawler::runner::version(),
-    about = "celestia-browser is a fast crawler focused on execution in automation pipelines offering both headless and non-headless crawling.",
+    name = "celestia-spider",
+    version = celestia_spider::runner::version(),
+    about = "celestia-spider is a fast crawler for automation pipelines with headless and non-headless crawling.",
     long_about = None
 )]
 struct Cli {
@@ -76,7 +76,7 @@ struct Cli {
     /// Custom header/cookie to include in all http request in header:value format (file)
     #[arg(short = 'H', long = "headers")]
     headers: Vec<String>,
-    /// Path to the celestia configuration file
+    /// Path to the celestia-spider configuration file
     #[arg(long, default_value = "")]
     config: String,
     /// Path to custom form configuration file
@@ -530,22 +530,22 @@ fn main() {
     // List output fields exits before the banner/runner (reference crawler
     // handles -lof first in main).
     if options.list_output_fields {
-        browser_crawler::output::list_output_fields();
+        celestia_spider::output::list_output_fields();
         std::process::exit(0);
     }
     if options.health_check {
-        browser_crawler::runner::health_check();
+        celestia_spider::runner::health_check();
         std::process::exit(0);
     }
 
     // Banner (reference crawler showBanner; suppressed by -silent / --no-banner).
     if !options.silent && !cli._no_banner {
-        println!("celestia-browser v{} — fast crawler for automation pipelines", browser_crawler::runner::version());
+        println!("celestia-spider v{} - fast crawler for automation pipelines", celestia_spider::runner::version());
     }
 
     // Cleanup: resume files older than 10 days are removed at startup
     // (reference crawler cleanupOldResumeFiles).
-    browser_crawler::runner::cleanup_old_resume_files(10);
+    celestia_spider::runner::cleanup_old_resume_files(10);
 
     let mut runner = match Runner::new(options) {
         Ok(r) => r,
@@ -580,7 +580,7 @@ fn main() {
 
     // Post-run housekeeping (reference crawler main.go): dedupe lines in the
     // store-field dir and remove the resume file after a successful run.
-    browser_crawler::output::dedupe_lines_in_dir("celestia_field");
+    celestia_spider::output::dedupe_lines_in_dir("celestia_field");
     runner.remove_resume_file();
 }
 
@@ -588,8 +588,8 @@ fn main() {
 /// following same-host links depth-first, and emit the resulting
 /// `SitemapNode` tree as JSON (array of roots when multiple URLs are given).
 fn run_sitemap_tree(cli: &Cli) {
-    use browser_crawler::mapper::SiteMapper;
-    use browser_crawler::types::{RenderMode, RenderOptions};
+    use celestia_spider::mapper::SiteMapper;
+    use celestia_spider::types::{RenderMode, RenderOptions};
 
     if cli.urls.is_empty() {
         eprintln!("error: --sitemap-tree requires at least one target url (-u)");
@@ -615,7 +615,7 @@ fn run_sitemap_tree(cli: &Cli) {
         .build()
         .expect("failed to build tokio runtime");
 
-    let roots: Vec<browser_crawler::types::SitemapNode> = runtime.block_on(async {
+    let roots: Vec<celestia_spider::types::SitemapNode> = runtime.block_on(async {
         let mut roots = Vec::new();
         for url in &cli.urls {
             match mapper.map_site(url).await {
@@ -651,7 +651,7 @@ fn run_sitemap_tree(cli: &Cli) {
 /// Parse a reference-crawler-style duration argument (`30s`, `5m`, `1h`,
 /// `1h30m`, `500ms`, `2d`) — see `parse_go_duration`.
 pub fn parse_duration_arg(input: &str) -> Result<Duration, String> {
-    browser_crawler::types::options::parse_go_duration(input)
+    celestia_spider::types::options::parse_go_duration(input)
 }
 
 /// Apply a `--config` file: simple `flag-name: value` lines (goflags-style

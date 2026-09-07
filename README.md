@@ -1,13 +1,19 @@
-# spider
+# celestia-spider
 
 [![Rust](https://img.shields.io/badge/rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A fast, full-featured web crawler in Rust with a CLI binary and a library crate
-(`browser-crawler`) — standard, headless, and hybrid crawl engines, scope &
+(`celestia-spider`) - standard, headless, and hybrid crawl engines, scope &
 filter pipelines, rate limiting, JavaScript crawling, form filling, and
 JSONL/template output — plus a token-optimized AI Intermediate Representation
 (IR) generator built on the same engine.
+
+> [!WARNING]
+> `celestia-spider` is experimental and has not yet been fully tested. APIs,
+> command-line behavior, and crawl results may change between releases. Do not
+> rely on it for production workloads without independently validating it for
+> your use case.
 
 ---
 
@@ -58,38 +64,36 @@ JSONL/template output — plus a token-optimized AI Intermediate Representation
 - Raw request/response storage per host (`--store-response`), custom output
   templates (`--output-template`), error logging (`--error-log`).
 
-> 📖 **Complete flag-by-flag documentation: [docs/FEATURES.md](docs/FEATURES.md)**
-
 ---
 
 ## 🚀 CLI Quick Start
 
 ```bash
-# Build
-cargo build --release          # binary: target/release/spider
+# Install
+cargo install celestia-spider
 
 # Basic crawl (depth 3, default standard engine)
-spider -u https://example.com
+celestia-spider -u https://example.com
 
 # JSONL output to file, silent logs
-spider -u https://example.com -d 3 -j -silent -o results.jsonl
+celestia-spider -u https://example.com -d 3 -j -silent -o results.jsonl
 
 # Headless crawl with stealth + XHR extraction
-spider -u https://spa.example.com --headless -j --xhr-extraction
+celestia-spider -u https://spa.example.com --headless -j --xhr-extraction
 
 # Scope, filters, and rate limiting
-spider -u https://example.com -cs "/(api|docs)/" -fr "logout" -rl 50
+celestia-spider -u https://example.com -cs "/(api|docs)/" -fr "logout" -rl 50
 
 # Known files + JS endpoint scraping
-spider -u https://example.com --known-files all --js-crawl
+celestia-spider -u https://example.com --known-files all --js-crawl
 
 # Crawl from a URL list (or stdin)
-cat urls.txt | spider -d 2 -silent
+cat urls.txt | celestia-spider -d 2 -silent
 ```
 
 Flag syntax: long names use `--` (`--js-crawl`); unambiguous single-char shorts
 work too (`-u`, `-d`, `-o`, `-j`, `-v`, `-c`, `-p`, `-s`). Run
-`spider --help` for the full list.
+`celestia-spider --help` for the full list.
 
 ---
 
@@ -102,7 +106,7 @@ serde-serializable config, receive a typed event stream, and control it
 (cancel / pause / resume) from your UI:
 
 ```rust
-use browser_crawler::{CrawlConfig, CrawlSession, CrawlerEvent};
+use celestia_spider::{CrawlConfig, CrawlSession, CrawlerEvent};
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
@@ -128,13 +132,10 @@ async fn main() -> Result<(), String> {
 }
 ```
 
-Full recipes (Tauri commands + JS listener, Electron sidecar, native UIs) in
-[docs/UI_INTEGRATION.md](docs/UI_INTEGRATION.md).
-
 ### Crawler engine API (`Runner`)
 
 ```rust
-use browser_crawler::{Options, Runner, StandardWriter};
+use celestia_spider::{Options, Runner, StandardWriter};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -165,7 +166,7 @@ pluggable storage exporters:
 
 ```rust
 use std::time::Duration;
-use browser_crawler::{Browser, RenderMode, WaitUntil};
+use celestia_spider::{Browser, RenderMode, WaitUntil};
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
@@ -241,25 +242,15 @@ build is unaffected.
 
 ---
 
-## 📖 Documentation
-
-| Document | Contents |
-|----------|----------|
-| [docs/FEATURES.md](docs/FEATURES.md) | **Complete end-user feature reference** — every flag, engine, filter, output format, and field selector |
-| [docs/USAGE.md](docs/USAGE.md) | Legacy IR-library usage guide and quickstart |
-| [docs/API.md](docs/API.md) | Legacy `Browser::builder()` IR-library API reference (crawler API: [`src/types/options.rs`](src/types/options.rs), [`src/runner.rs`](src/runner.rs)) |
-
 ## 🧪 Examples & Tests
 
 ```bash
-cargo run --example example       # multi-page streaming IR crawl
-cargo run --example single_page   # one-off page fetch + link extraction
-cargo test                        # 175 tests: unit + doc + end-to-end
+cargo test
 ```
 
 **End-to-end coverage** (`tests/e2e_crawl.rs`, `tests/e2e_cli.rs`): the suite
 spins up a local HTTP test server and exercises the real crawl engine and the
-`spider` binary — full-site crawls, depth limits, scope regexes,
+`celestia-spider` binary - full-site crawls, depth limits, scope regexes,
 extension/match/DSL filtering, known-files, JS endpoint crawling, form
 extraction & auto-fill, ignore-query-params, similar-URL collapsing, rate
 limiting, crawl-duration stop, retries, tech detection, knowledge-base

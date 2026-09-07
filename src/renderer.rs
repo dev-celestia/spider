@@ -215,7 +215,7 @@ impl PageFetcher {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use browser_crawler::{crawl_single_page, RenderOptions, RenderMode};
+/// use celestia_spider::{crawl_single_page, RenderOptions, RenderMode};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), String> {
@@ -250,4 +250,3 @@ mod tests {
         let _fetcher = PageFetcher::new(client, options);
     }
 }
-

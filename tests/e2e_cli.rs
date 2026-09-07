@@ -1,4 +1,4 @@
-//! End-to-end CLI tests: run the real `celestia-browser` binary as a child
+//! End-to-end CLI tests: run the real `celestia-spider` binary as a child
 //! process against the local test server and assert on stdout, exit codes,
 //! and output files.
 
@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use common::{spawn_sync, Route};
 
 fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_celestia-browser")
+    env!("CARGO_BIN_EXE_celestia-spider")
 }
 
 fn run(args: &[&str], stdin: Option<&str>) -> (i32, String, String) {
@@ -19,7 +19,7 @@ fn run(args: &[&str], stdin: Option<&str>) -> (i32, String, String) {
     if stdin.is_some() {
         cmd.stdin(Stdio::piped());
     }
-    let mut child = cmd.spawn().expect("spawn celestia-browser");
+    let mut child = cmd.spawn().expect("spawn celestia-spider");
     if let Some(input) = stdin {
         use std::io::Write;
         child
@@ -43,7 +43,10 @@ fn small_site() -> HashMap<String, Route> {
         "/".to_string(),
         Route::html("<html><body><a href=\"/about\">about</a><a href=\"/leaf\">leaf</a></body></html>"),
     );
-    routes.insert("/about".to_string(), Route::html("<html><body>about page</body></html>"));
+    routes.insert(
+        "/about".to_string(),
+        Route::html("<html><body><h1>About</h1></body></html>"),
+    );
     routes.insert("/leaf".to_string(), Route::html("<html><body>leaf page</body></html>"));
     routes.insert(
         "/robots.txt".to_string(),
@@ -57,7 +60,7 @@ fn small_site() -> HashMap<String, Route> {
 fn cli_help_shows_name_and_flags() {
     let (code, stdout, _) = run(&["--help"], None);
     assert_eq!(code, 0);
-    assert!(stdout.contains("celestia-browser"), "name in help: {stdout}");
+    assert!(stdout.contains("celestia-spider"), "name in help: {stdout}");
     assert!(stdout.contains("--headless"));
     assert!(stdout.contains("--jsonl"));
     assert!(stdout.contains("--depth"));
@@ -67,7 +70,7 @@ fn cli_help_shows_name_and_flags() {
 fn cli_version_prints_name() {
     let (code, stdout, _) = run(&["--version"], None);
     assert_eq!(code, 0);
-    assert!(stdout.starts_with("celestia-browser"), "{stdout}");
+    assert!(stdout.starts_with("celestia-spider"), "{stdout}");
 }
 
 #[test]
