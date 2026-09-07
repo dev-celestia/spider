@@ -107,7 +107,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_storage_exporter_custom_dir() {
-        let custom_dir = std::env::temp_dir().join("browser_crawler_test_export");
+        let custom_dir = std::env::temp_dir().join("celestia_spider_test_export");
         let exporter = FileStorageExporter::new(&custom_dir);
 
         let sample_ir = PageIR {
