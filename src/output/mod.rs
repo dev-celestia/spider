@@ -91,6 +91,7 @@ pub struct StandardWriter {
     store_response_dir: String,
     omit_raw: bool,
     omit_body: bool,
+    markdown: bool,
     exclude_output_fields: Vec<String>,
     output_template: String,
     output_file: Option<Mutex<File>>,
@@ -167,6 +168,7 @@ impl StandardWriter {
             store_response_dir,
             omit_raw: options.omit_raw,
             omit_body: options.omit_body,
+            markdown: options.markdown,
             exclude_output_fields: options.exclude_output_fields.clone(),
             output_template: options.output_template.clone(),
             output_file,
@@ -258,6 +260,14 @@ impl StandardWriter {
             }
         }
 
+        // Render Markdown before omissions: format_markdown needs the
+        // response body, which omit_body clears below.
+        let markdown_output = if self.markdown {
+            self.render_markdown(result)
+        } else {
+            String::new()
+        };
+
         if self.omit_raw {
             if let Some(req) = result.request.as_mut() {
                 req.raw.clear();
@@ -272,12 +282,13 @@ impl StandardWriter {
             }
         }
 
-        // Format precedence: template > JSON > fields > screen
-        // (reference crawler output.go:246-256).
+        // Format precedence: template > JSON > markdown > fields > screen
         let formatted = if !self.output_template.is_empty() {
             self.format_template(result)
         } else if self.json {
             self.format_json(result)
+        } else if self.markdown {
+            markdown_output
         } else if !self.fields.is_empty() {
             let mut builder = String::new();
             for fop in fields::format_field(result, &self.fields) {
@@ -325,6 +336,24 @@ impl StandardWriter {
         }
 
         Ok(())
+    }
+
+    /// Markdown format: page content rendered through the HTML→IR
+    /// transformer (`-md`). Empty when there is no response body.
+    fn render_markdown(&self, result: &Result) -> String {
+        let Some(resp) = result.response.as_ref() else {
+            return String::new();
+        };
+        if resp.body.is_empty() {
+            return String::new();
+        }
+        let url = result
+            .request
+            .as_ref()
+            .map(|r| r.url.as_str())
+            .unwrap_or_default();
+        let ir = crate::transformer::transform_html_to_ir(url, &resp.body);
+        format!("# {}\n\n{}\n", ir.title, ir.markdown_ir)
     }
 
     /// JSON context for DSL output conditions.
@@ -727,6 +756,32 @@ mod tests {
         let w = StandardWriter::from_options(&o);
         let line = w.format_template(&sample());
         assert_eq!(line, "", "unknown tag drops the whole line");
+    }
+
+    #[test]
+    fn test_render_markdown() {
+        let mut o = Options::with_defaults();
+        o.silent = true;
+        let w = StandardWriter::from_options(&o);
+        let mut result = sample();
+        result.response.as_mut().unwrap().body =
+            "<html><head><title>Docs</title></head><body><h1>Hello</h1><p>World</p></body></html>"
+                .into();
+        let md = w.render_markdown(&result);
+        assert!(md.starts_with("# Docs\n"), "{md}");
+        assert!(md.contains("Hello"));
+        assert!(md.contains("World"));
+        assert!(!md.contains("<html>"), "raw HTML must not leak into output");
+    }
+
+    #[test]
+    fn test_render_markdown_empty_body() {
+        let mut o = Options::with_defaults();
+        o.silent = true;
+        let w = StandardWriter::from_options(&o);
+        let mut result = sample();
+        result.response.as_mut().unwrap().body.clear();
+        assert_eq!(w.render_markdown(&result), "");
     }
 
     #[test]

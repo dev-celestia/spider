@@ -330,6 +330,8 @@ pub struct Options {
     pub exclude_output_fields: Vec<String>,
     /// Write output in jsonl format (`-j`).
     pub json: bool,
+    /// Output page content as Markdown instead of URLs/HTML (`-md`).
+    pub markdown: bool,
     /// Disable output coloring / ANSI codes (`-nc`).
     pub no_colors: bool,
     /// Display output only (`-silent`).
@@ -460,6 +462,7 @@ impl Clone for Options {
             list_output_fields: self.list_output_fields,
             exclude_output_fields: self.exclude_output_fields.clone(),
             json: self.json,
+            markdown: self.markdown,
             no_colors: self.no_colors,
             silent: self.silent,
             verbose: self.verbose,

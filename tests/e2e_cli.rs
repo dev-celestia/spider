@@ -125,6 +125,20 @@ fn cli_jsonl_output_is_valid_json() {
 }
 
 #[test]
+fn cli_markdown_output_renders_page_content() {
+    let server = standard_site_and_server();
+    let (code, stdout, stderr) = run(
+        &["-u", &format!("{}/", server.1), "-d", "1", "-m", "--silent"],
+        None,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    // Pages render as Markdown content instead of bare URLs.
+    assert!(stdout.contains("About"), "markdown heading in stdout: {stdout}");
+    assert!(!stdout.contains("<html>"), "no raw HTML expected: {stdout}");
+    server.0.shutdown();
+}
+
+#[test]
 fn cli_output_file_written_and_no_clobber() {
     let server = standard_site_and_server();
     let dir = std::env::temp_dir().join("e2e_cli_out");

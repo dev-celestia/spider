@@ -322,6 +322,9 @@ struct Cli {
     /// Write output in jsonl format
     #[arg(short = 'j', long = "jsonl")]
     jsonl: bool,
+    /// Output page content as Markdown instead of URLs/HTML
+    #[arg(short = 'm', long = "markdown")]
+    markdown: bool,
     /// Disable output content coloring (ANSI escape codes)
     #[arg(long = "no-color")]
     no_color: bool,
@@ -504,6 +507,7 @@ fn main() {
     options.list_output_fields = cli.list_output_fields;
     options.exclude_output_fields = cli.exclude_output_fields;
     options.json = cli.jsonl;
+    options.markdown = cli.markdown;
     options.no_colors = cli.no_color;
     options.silent = cli.silent;
     options.verbose = cli.verbose;
